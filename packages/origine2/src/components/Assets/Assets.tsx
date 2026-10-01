@@ -116,6 +116,7 @@ export default function Assets({
   fileConfig,
   fileFunction,
   allowedExtNames,
+  fileFilter,
 }: {
   rootPath: string[];
   basePath?: string[]; // 相对于rootPath的路径
@@ -125,6 +126,7 @@ export default function Assets({
   fileConfig?: IFileConfig;
   fileFunction?: IFileFunction;
   allowedExtNames?: string[];
+  fileFilter?: (file: IFile) => boolean;
 }) {
   const { mutate } = useSWRConfig();
 
@@ -201,12 +203,13 @@ export default function Assets({
         (file) =>
           file.name.toLocaleLowerCase().includes(filterText.value.toLocaleLowerCase()) &&
           !fileConfig?.get(file.path)?.isHidden &&
+          (file.isDir || !fileFilter || fileFilter(file)) &&
           (!allowedExtNames ||
             allowedExtNames.length === 0 ||
             allowedExtNames.includes(file.extName.toLocaleLowerCase()) ||
             file.isDir),
       ) ?? [],
-    [files, filterText, fileConfig, allowedExtNames],
+    [files, filterText, fileConfig, allowedExtNames, fileFilter],
   );
 
   const sortedFiles = useMemo(() => {

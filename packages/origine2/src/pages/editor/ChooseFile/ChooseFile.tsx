@@ -21,6 +21,8 @@ export interface IChooseFile {
   onChange: (choosedFile: IFile | null) => void;
   extNames?: string[]; // 允许的拓展名
   hiddenFiles?: string[];
+  fileFilter?: (file: IFile) => boolean;
+  onOpen?: () => void;
 }
 
 export default function ChooseFile(props: IChooseFile) {
@@ -113,6 +115,7 @@ export default function ChooseFile(props: IChooseFile) {
   }
 
   function toggleIsCalloutVisible() {
+    if (!isShowChooseFileCallout.value) props.onOpen?.();
     invalidPath.value = '';
     invalidRanges.value = [];
     isShowChooseFileCallout.set(!isShowChooseFileCallout.value);
@@ -173,6 +176,7 @@ export default function ChooseFile(props: IChooseFile) {
             fileFunction={fileFunction}
             fileConfig={fileConfig}
             allowedExtNames={props.extNames}
+            fileFilter={props.fileFilter}
           />
           {invalidRanges.value.length > 0 &&
             <div className={styles.chooseFileFooterWarning}>

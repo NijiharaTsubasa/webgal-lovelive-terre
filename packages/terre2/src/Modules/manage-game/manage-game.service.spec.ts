@@ -3,6 +3,8 @@ import { ConsoleLogger } from '@nestjs/common';
 import { ManageGameService } from './manage-game.service';
 import { WebgalFsService } from '../webgal-fs/webgal-fs.service';
 
+jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
+
 describe('ManageGameService', () => {
   let service: ManageGameService;
 

@@ -1,6 +1,16 @@
-# WebGAL_MYGO专版可视化编辑器
+# WebGAL_LoveLive专版可视化编辑器
 
-此仓库用于维护WebGAL的MYGO专版可视化编辑器。
+本项目 Fork 自 [WebGAL_MYGO专版可视化编辑器](https://github.com/boomwwww/webgal-mygo-terre/)
+
+仅对原 WebGAL_MYGO_Terre 编辑器做适配 3D 立绘的最小化修改，3D 模型复用 Live2D 编辑界面和参数。
+
+## 生成式人工智能使用声明
+
+本项目中大部分新增代码均由生成式人工智能（Generative AI）工具协助编写。核心路线和方案由作者与 AI 共同讨论确定。
+
+但由于作者本人对该领域技术栈不熟悉，未对代码进行深度的代码审查或系统的测试，主要对最终呈现的功能效果进行验收，因此代码库可能存在较多技术债务与不规范之处。
+
+如您在使用中遇到问题，或愿意帮助优化、重构底层代码，欢迎通过 Issue 或 Pull Request 参与共建。
 
 ---
 

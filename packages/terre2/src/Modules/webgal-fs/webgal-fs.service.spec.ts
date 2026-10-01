@@ -3,6 +3,10 @@ import * as fs from 'fs/promises';
 import { join, resolve } from 'path';
 import AdmZip = require('adm-zip');
 import { WebgalFsService } from './webgal-fs.service';
+import { UserDataService } from '../user-data/user-data.service';
+
+// These filesystem tests never invoke the OS recycle bin.
+jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
 
 describe('WebgalFsService', () => {
   const testRoot = join(
@@ -19,7 +23,51 @@ describe('WebgalFsService', () => {
   });
 
   afterEach(async () => {
+    jest.restoreAllMocks();
     await fs.rm(testRoot, { recursive: true, force: true });
+  });
+
+  it('refreshes the glTF catalog after resource edits, renames and deletions', async () => {
+    const games = join(testRoot, 'games');
+    const game = join(games, 'demo');
+    const resource = join(game, 'game', 'figure', 'motions');
+    await fs.mkdir(resource, { recursive: true });
+    await fs.writeFile(join(game, 'index.html'), '');
+    await fs.writeFile(
+      join(game, 'webgal-engine.json'),
+      JSON.stringify({ id: 'webgal-lovelive.lovelive' }),
+    );
+    jest
+      .spyOn(UserDataService, 'getGameRoot')
+      .mockImplementation((name) => (name ? join(games, name) : games));
+    jest
+      .spyOn(UserDataService, 'getEngineTemplateRoot')
+      .mockReturnValue(join(testRoot, 'template'));
+    const config = join(resource, 'config.json');
+    const catalog = join(game, 'game', 'gltf-resources.json');
+    await service.updateTextFile(
+      config,
+      JSON.stringify({
+        components: [{ type: 'motion', name: 'idle', src: 'idle.json' }],
+      }),
+    );
+    expect(
+      JSON.parse(await fs.readFile(catalog, 'utf8')).resources[0].name,
+    ).toBe('idle');
+    await service.renameFile(config, 'not-a-manifest.json');
+    expect(JSON.parse(await fs.readFile(catalog, 'utf8')).resources).toEqual(
+      [],
+    );
+    await service.updateTextFile(
+      config,
+      JSON.stringify({
+        components: [{ type: 'motion', name: 'walk', src: 'walk.json' }],
+      }),
+    );
+    await service.deleteFile(config);
+    expect(JSON.parse(await fs.readFile(catalog, 'utf8')).resources).toEqual(
+      [],
+    );
   });
 
   it('allows regular Windows absolute paths in segment validation', () => {

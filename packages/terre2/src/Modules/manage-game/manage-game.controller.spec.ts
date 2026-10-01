@@ -4,6 +4,8 @@ import { ManageGameController } from './manage-game.controller';
 import { ManageGameService } from './manage-game.service';
 import { WebgalFsService } from '../webgal-fs/webgal-fs.service';
 
+jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
+
 describe('ManageGameController', () => {
   let controller: ManageGameController;
 

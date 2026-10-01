@@ -2,11 +2,20 @@ import { ConsoleLogger, Injectable } from '@nestjs/common';
 import * as fs from 'fs/promises';
 import archiver = require('archiver');
 import AdmZip = require('adm-zip');
-import { basename, dirname, extname, isAbsolute, join } from 'path';
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  sep,
+} from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UserDataService } from '../user-data/user-data.service';
 import trash from 'trash';
+import { generateGltfResourceCatalog } from '../manage-game/gltf-resource-catalog';
 
 const pExecFile = promisify(execFile);
 
@@ -34,6 +43,34 @@ interface FileList {
 @Injectable()
 export class WebgalFsService {
   constructor(private readonly logger: ConsoleLogger) {}
+
+  async refreshGltfCatalogForPath(path: string, changed = true) {
+    try {
+      const normalized = this.normalizeFsPath(path);
+      const rel = relative(UserDataService.getGameRoot(), normalized);
+      if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return;
+      const [gameName, ...segments] = rel.split(sep);
+      const inner = segments.join('/');
+      if (
+        !gameName ||
+        !(
+          inner === 'webgal-engine.json' ||
+          inner === 'game/figure' ||
+          inner.startsWith('game/figure/') ||
+          inner === 'game/scene' ||
+          inner.startsWith('game/scene/')
+        )
+      )
+        return;
+      await generateGltfResourceCatalog(
+        UserDataService.getGameRoot(gameName),
+        changed,
+        UserDataService.getEngineTemplateRoot(),
+      );
+    } catch (error) {
+      this.logger.warn(`glTF 资源清单未更新: ${String(error)}`);
+    }
+  }
 
   static checkFileName(name: string): boolean {
     return name.search(/[\/\\\:\*\?"\<\>\|]/) === -1;
@@ -113,6 +150,7 @@ export class WebgalFsService {
     try {
       this.logger.log(`复制: ${decodeURI(src)} -> ${decodeURI(dest)}`);
       await fs.cp(decodeURI(src), decodeURI(dest), { recursive: true });
+      await this.refreshGltfCatalogForPath(dest);
       return true;
     } catch (error) {
       this.logger.error(
@@ -185,8 +223,9 @@ export class WebgalFsService {
 
     return await new Promise((resolve) => {
       fs.rename(oldPath, newPath)
-        .then(() => {
+        .then(async () => {
           this.logger.log(`重命名文件: ${oldPath} -> ${newPath}`);
+          await this.refreshGltfCatalogForPath(oldPath);
           resolve('File renamed!');
         })
         .catch(() => {
@@ -203,8 +242,9 @@ export class WebgalFsService {
   async deleteFile(path: string) {
     return await new Promise((resolve) => {
       fs.unlink(decodeURI(path))
-        .then(() => {
+        .then(async () => {
           this.logger.log(`删除文件: ${decodeURI(path)}`);
+          await this.refreshGltfCatalogForPath(path);
           resolve('File Deleted');
         })
         .catch(() => {
@@ -218,7 +258,7 @@ export class WebgalFsService {
    * 删除文件或目录
    * @param path
    */
-  async deleteFileOrDirectory(_path: string): Promise<boolean> {
+  async deleteFileOrDirectory(_path: string, nested = false): Promise<boolean> {
     try {
       const path = decodeURI(_path);
 
@@ -229,7 +269,7 @@ export class WebgalFsService {
         await Promise.all(
           files.map(async (file) => {
             const filePath = `${path}/${file}`;
-            await this.deleteFileOrDirectory(filePath);
+            await this.deleteFileOrDirectory(filePath, true);
           }),
         );
         await fs.rmdir(path);
@@ -238,6 +278,7 @@ export class WebgalFsService {
         await fs.unlink(path);
         this.logger.log(`删除文件: ${path}`);
       }
+      if (!nested) await this.refreshGltfCatalogForPath(_path);
       return true;
     } catch (error) {
       this.logger.error(`删除失败: ${decodeURI(_path)}, ${String(error)}`);
@@ -263,6 +304,7 @@ export class WebgalFsService {
 
       await fs.rename(path, newPath);
       this.logger.log(`重命名: ${path} -> ${newPath}`);
+      await this.refreshGltfCatalogForPath(path);
 
       return true;
     } catch (error) {
@@ -297,6 +339,7 @@ export class WebgalFsService {
       if (trashBinaryPath && (await this.exists(trashBinaryPath))) {
         try {
           await pExecFile(trashBinaryPath, [path]);
+          await this.refreshGltfCatalogForPath(path);
           return true;
         } catch (error) {
           // macOS 上二进制可能因执行位丢失或 Gatekeeper 隔离而无法运行, 回退到库实现
@@ -305,6 +348,7 @@ export class WebgalFsService {
       }
 
       await trash(path, { glob: false });
+      await this.refreshGltfCatalogForPath(path);
 
       return true;
     } catch (error) {
@@ -375,8 +419,9 @@ export class WebgalFsService {
   async updateTextFile(path: string, content: string) {
     return await new Promise(async (resolve) => {
       fs.writeFile(decodeURI(path), content)
-        .then(() => {
+        .then(async () => {
           this.logger.log(`更新文件: ${decodeURI(path)}`);
+          await this.refreshGltfCatalogForPath(path);
           resolve('Updated.');
         })
         .catch(() => {
@@ -470,6 +515,7 @@ export class WebgalFsService {
         await fs.writeFile(filePath, file.file);
         this.logger.log(`写入文件: ${filePath}`);
       }
+      await this.refreshGltfCatalogForPath(targetPath);
       return true;
     } catch (error) {
       this.logger.error(`写入文件失败: ${String(error)}`);
@@ -502,6 +548,7 @@ export class WebgalFsService {
     const newPath = join(dir, newName);
 
     await fs.copyFile(filePath, newPath);
+    await this.refreshGltfCatalogForPath(newPath);
     this.logger.log(`复制文件: ${filePath} -> ${newPath}`);
     return newPath;
   }
@@ -595,11 +642,12 @@ export class WebgalFsService {
       await fs.mkdir(decodedTargetDir, { recursive: true });
 
       return await new Promise<boolean>((resolve) => {
-        zip.extractAllToAsync(decodedTargetDir, true, true, (err) => {
+        zip.extractAllToAsync(decodedTargetDir, true, true, async (err) => {
           if (err) {
             this.logger.error(`解压缩失败: ${String(err)}`);
             resolve(false);
           } else {
+            await this.refreshGltfCatalogForPath(decodedTargetDir);
             resolve(true);
           }
         });

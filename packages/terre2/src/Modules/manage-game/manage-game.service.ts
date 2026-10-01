@@ -1,4 +1,4 @@
-import { ConsoleLogger, Injectable } from '@nestjs/common';
+import { BadRequestException, ConsoleLogger, Injectable } from '@nestjs/common';
 import { _open } from '../../util/open';
 import { IFileInfo, WebgalFsService } from '../webgal-fs/webgal-fs.service';
 import * as process from 'process';
@@ -14,6 +14,8 @@ import { TemplateConfigDto } from '../manage-template/manage-template.dto';
 import { promisify } from 'util';
 import { execFile } from 'child_process';
 import { join } from 'path';
+import { generateGltfResourceCatalog } from './gltf-resource-catalog';
+import { UserDataService } from '../user-data/user-data.service';
 
 @Injectable()
 export class ManageGameService {
@@ -21,6 +23,23 @@ export class ManageGameService {
     private readonly logger: ConsoleLogger,
     private readonly webgalFs: WebgalFsService,
   ) {}
+
+  async updateGltfResourceCatalog(gameName: string) {
+    if (
+      typeof gameName !== 'string' ||
+      !WebgalFsService.checkFileName(gameName) ||
+      !gameName ||
+      gameName === '.' ||
+      gameName === '..'
+    ) {
+      throw new BadRequestException('Invalid game name');
+    }
+    return generateGltfResourceCatalog(
+      this.webgalFs.getPathFromRoot(`public/games/${gameName}`),
+      false,
+      UserDataService.getEngineTemplateRoot(),
+    );
+  }
 
   /**
    * 获取游戏列表
@@ -327,6 +346,7 @@ export class ManageGameService {
     ejectPlatform: 'web' | 'electron-windows' | 'android',
   ): Promise<boolean> {
     try {
+      await this.updateGltfResourceCatalog(gameName);
       // 检查是否使用了衍生版本
       const gameRootDir = `/public/games/${gameName}/`;
       const checkIsEngineTemplateExist = async () => {

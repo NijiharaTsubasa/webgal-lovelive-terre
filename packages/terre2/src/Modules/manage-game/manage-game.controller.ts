@@ -201,6 +201,14 @@ export class ManageGameController {
     const dirPath = this.webgalFs.getPathFromRoot(
       `public/games/${readDirPath}`,
     );
+    if (
+      readDirPath
+        .replace(/\\/g, '/')
+        .replace(/\/$/, '')
+        .endsWith('/game/figure')
+    ) {
+      await this.webgalFs.refreshGltfCatalogForPath(dirPath, false);
+    }
     const dirInfo = await this.webgalFs.getDirInfo(dirPath);
     return { readDirPath, dirPath, dirInfo };
   }
@@ -289,6 +297,11 @@ export class ManageGameController {
     );
   }
 
+  @Post('updateGltfResourceCatalog')
+  async updateGltfResourceCatalog(@Body() data: { gameName: string }) {
+    return this.manageGame.updateGltfResourceCatalog(data.gameName);
+  }
+
   @Get('getGameConfig/:gameName')
   @ApiOperation({ summary: 'Get Game Configuration' })
   @ApiResponse({ status: 200, description: 'Returned game configuration.' })
@@ -297,6 +310,12 @@ export class ManageGameController {
     description: 'Failed to get the game configuration.',
   })
   async getGameConfig(@Param('gameName') gameName: string) {
+    await this.webgalFs.refreshGltfCatalogForPath(
+      this.webgalFs.getPathFromRoot(
+        `public/games/${decodeURI(gameName)}/game/scene`,
+      ),
+      false,
+    );
     const configFilePath = this.webgalFs.getPathFromRoot(
       `/public/games/${decodeURI(gameName)}/game/config.txt`,
     );

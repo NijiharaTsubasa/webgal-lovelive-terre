@@ -5,7 +5,7 @@ import ChooseFile from "../../ChooseFile/ChooseFile";
 import { useValue } from "../../../../hooks/useValue";
 import { getArgByKey } from "../utils/getArgByKey";
 import TerreToggle from "../../../../components/terreToggle/TerreToggle";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { TerrePanel } from "@/pages/editor/GraphicalEditor/components/TerrePanel";
 import { Button, Input } from "@fluentui/react-components";
@@ -21,6 +21,8 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
+import { canChooseFigureFile, catalogFigurePaths, gltfFigureOptions, gltfFigureSelectionError, GltfCatalogResult, isGltfConfigPath, isLoveliveEngine } from "@/utils/gltfFigure";
+import { eventBus } from "@/utils/eventBus";
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
 type AnimationFlag = "" | "on";
@@ -34,6 +36,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const updateExpand = useEditorStore.use.updateExpand();
   const isGoNext = useValue(!!getArgByKey(props.sentence, "next"));
   const figureFile = useValue(props.sentence.content);
+  const [figureSelectionError, setFigureSelectionError] = useState("");
+  const figureSelectionRequest = useRef(0);
   const isHaveSpineArg = figureFile.value.includes('?type=spine');
   const figurePosition = useValue<FigurePosition>("");
   const isNoFile = props.sentence.content === "" || props.sentence.content === "none";
@@ -66,6 +70,42 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const [spineSkinsList, setSpineSkinsList] = useState<string[]>([]);
   const [isSpineJsonFormat, setIsSpineJsonFormat] = useState(false);
   const [isJsonlFormat, setIsJsonlFormat] = useState(false);
+  const [gltfCatalog, setGltfCatalog] = useState<GltfCatalogResult>({ enabled: false, resources: [] });
+  const [isGltfFormat, setIsGltfFormat] = useState(false);
+  const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
+  const catalogRequest = useRef(0);
+  const catalogSignature = useRef<string | null>(null);
+  const refreshGltfCatalog = useCallback(async () => {
+    const request = ++catalogRequest.current;
+    try {
+      const manifest = await axios.get(`/games/${encodeURIComponent(gameDir)}/webgal-engine.json`);
+      if (!isLoveliveEngine(manifest.data)) {
+        if (request === catalogRequest.current) setGltfCatalog({ enabled: false, resources: [] });
+        return;
+      }
+      const response = await axios.post<GltfCatalogResult>('/api/manageGame/updateGltfResourceCatalog', { gameName: gameDir });
+      if (request === catalogRequest.current) {
+        const signature = JSON.stringify(response.data.resources);
+        // The running preview caches its catalog. Newly discovered packages
+        // require a fresh preview, but unchanged scans must not restart it.
+        if (catalogSignature.current !== null && catalogSignature.current !== signature) {
+          eventBus.emit('iframe:refresh-game', null);
+        }
+        catalogSignature.current = signature;
+        setGltfCatalog(response.data);
+      }
+    } catch (error) {
+      if (request === catalogRequest.current) setGltfCatalog({ enabled: false, resources: [] });
+      console.warn('glTF resource catalog could not be refreshed:', error);
+    }
+  }, [gameDir]);
+  useEffect(() => {
+    catalogSignature.current = null;
+    setGltfCatalog({ enabled: false, resources: [] });
+    void refreshGltfCatalog();
+    return () => { catalogRequest.current += 1; };
+  }, [refreshGltfCatalog]);
+  const gltfModelPaths = useMemo(() => catalogFigurePaths(gltfCatalog.resources), [gltfCatalog.resources]);
 
   const currentMotion = useValue(getArgByKey(props.sentence, "motion").toString() ?? "");
   const currentExpression = useValue(
@@ -223,40 +263,67 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
 
   // 载入 motions / expressions（支持 .jsonl / .json / spine / .wmdl）
   useEffect(() => {
+    const controller = new AbortController();
+    const requestOptions = { signal: controller.signal };
+    const cleanup = () => controller.abort();
     // reset
     setIsJsonlFormat(false);
     setIsSpineJsonFormat(false);
     setL2dMotionsList([]);
     setL2dExpressionsList([]);
     setSpineSkinsList([]);
+    setIsGltfFormat(false);
+    setSupportsLive2DExpressions(false);
 
     const pathRaw = figureFile.value || "";
     const pathLower = pathRaw.toLowerCase();
 
-    if (!pathRaw || pathRaw === "none") return;
+    if (!pathRaw || pathRaw === "none") return cleanup;
+
+    if (isGltfConfigPath(pathRaw)) {
+      if (gltfCatalog.enabled && gltfModelPaths.has(pathRaw.split(/[?#]/)[0])) {
+        axios.get(`/games/${gameDir}/game/figure/${pathRaw}`, requestOptions).then(async response => {
+          if (controller.signal.aborted) return;
+          const adapterPaths = [...new Set(gltfCatalog.resources.filter(entry => entry.type === 'garupa-expression-adapter').map(entry => entry.config))];
+          const catalogUrl = new URL(`/games/${encodeURIComponent(gameDir)}/game/gltf-resources.json`, window.location.origin);
+          const adapterConfigs = await Promise.all(adapterPaths.map(path => axios.get(new URL(path, catalogUrl).href, requestOptions).then(response => response.data)));
+          if (controller.signal.aborted) return;
+          const options = gltfFigureOptions(response.data, gltfCatalog.resources, adapterConfigs);
+          if (!options) return;
+          setIsGltfFormat(true);
+          setSupportsLive2DExpressions(options.supportsLive2DExpressions);
+          setL2dMotionsList(options.motions);
+          setL2dExpressionsList(options.expressions);
+        }).catch(error => { if (!controller.signal.aborted) console.warn('glTF figure could not be read:', error); });
+      }
+      return cleanup;
+    }
 
     // JSONL
     if (isJsonlPath(pathRaw)) {
       setIsJsonlFormat(true);
       const url = `/games/${gameDir}/game/figure/${pathRaw}`;
       axios
-        .get(url, { responseType: "text" })
+        .get(url, { responseType: "text", ...requestOptions })
         .then((resp) => {
+          if (controller.signal.aborted) return;
           const { motions, expressions } = parseJsonlSummary(resp.data || "");
           setL2dMotionsList(motions);
           setL2dExpressionsList(expressions);
         })
         .catch(() => {
+          if (controller.signal.aborted) return;
           setL2dMotionsList([]);
           setL2dExpressionsList([]);
         });
-      return;
+      return cleanup;
     }
 
     // JSON（Live2D v2/v3 或 Spine JSON）
     if (pathLower.endsWith(".json") || pathLower.includes(".json?")) {
       const url = `/games/${gameDir}/game/figure/${pathRaw}`;
-      axios.get(url).then((resp) => {
+      axios.get(url, requestOptions).then((resp) => {
+        if (controller.signal.aborted) return;
         const data = resp.data;
 
         // 检测是否为 Spine JSON 格式
@@ -297,13 +364,14 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           );
           setL2dExpressionsList((exps || []).sort((a, b) => a.localeCompare(b)));
         }
-      });
+      }).catch(error => { if (!controller.signal.aborted) console.warn('Figure could not be read:', error); });
     }
 
     // WMDL (L2DW 新版模型配置文件)
     if (pathLower.endsWith(".wmdl")) {
       const url = `/games/${gameDir}/game/figure/${pathRaw}`;
-      axios.get(url).then((resp) => {
+      axios.get(url, requestOptions).then((resp) => {
+        if (controller.signal.aborted) return;
         const wmdlData = resp.data;
 
         if (wmdlData?.modelRelativePath) {
@@ -312,7 +380,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           const mainModelUrl = `${dir}/${mainModelPath}`;
 
           // 进一步获取主模型文件，解析 motions 和 expressions
-          axios.get(mainModelUrl).then((modelResp) => {
+          axios.get(mainModelUrl, requestOptions).then((modelResp) => {
+            if (controller.signal.aborted) return;
             const modelData = modelResp.data;
             if (modelData?.motions) {
               const motions = Object.keys(modelData.motions);
@@ -322,11 +391,12 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               const exps: string[] = (modelData.expressions as Array<{ name: string }>)?.map((e) => e.name);
               setL2dExpressionsList((exps || []).sort((a, b) => a.localeCompare(b)));
             }
-          });
+          }).catch(error => { if (!controller.signal.aborted) console.warn('WMDL model could not be read:', error); });
         }
-      });
+      }).catch(error => { if (!controller.signal.aborted) console.warn('WMDL could not be read:', error); });
     }
-  }, [figureFile.value, gameDir]);
+    return cleanup;
+  }, [figureFile.value, gameDir, gltfCatalog, gltfModelPaths]);
 
   useEffect(() => {
     /**
@@ -350,7 +420,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   // 是否为 Live2D 变体（json/jsonl/wmdl）
   const isLive2DVariant = useMemo(() => {
     const url = figureFile.value.toLowerCase();
-    return url.endsWith('.json') || url.endsWith('.jsonl') || url.endsWith('.wmdl');
+    return !isGltfConfigPath(url) && (url.endsWith('.json') || url.endsWith('.jsonl') || url.endsWith('.wmdl'));
   }, [figureFile.value]);
 
   const submit = () => {
@@ -452,7 +522,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const renderMoreOptions = () => {
     return <>
       {/* 图片立绘 */}
-      {!isLive2DVariant && (
+      {!isLive2DVariant && !isGltfFormat && (
         <OptionCategory key="animationFlagOptionGroup" title={t`图片差分`}>
           <CommonOptions title={t`唇形同步与眨眼`} key="animationFlagOption">
             <WheelDropdown
@@ -520,8 +590,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           )}
         </OptionCategory>
       )}
-      {/* Live2D 立绘 */}
-      {isLive2DVariant && !isSpineJsonFormat && (
+      {/* Live2D 与 glTF 立绘 */}
+      {(isLive2DVariant || isGltfFormat) && !isSpineJsonFormat && (
         <>
           <OptionCategory key="commonOptionGroup" title={t`通用`}>
             <CommonOptions title={t`自定义 Live2D 绘制范围`} key="bounds">
@@ -650,7 +720,25 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               title={t`选择立绘文件`}
               basePath={['figure']}
               selectedFilePath={figureFile.value}
-              onChange={(fileDesc) => {
+              onOpen={() => { void refreshGltfCatalog(); }}
+              fileFilter={file => canChooseFigureFile(file.path, gltfCatalog.enabled)}
+              onChange={async (fileDesc) => {
+                const request = ++figureSelectionRequest.current;
+                setFigureSelectionError("");
+                if (gltfCatalog.enabled && fileDesc && /\.json$/i.test(fileDesc.name)) {
+                  try {
+                    const response = await axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${fileDesc.name.split('/').map(encodeURIComponent).join('/')}`);
+                    if (request !== figureSelectionRequest.current) return;
+                    const error = gltfFigureSelectionError(response.data);
+                    if (error) {
+                      setFigureSelectionError(error);
+                      return;
+                    }
+                  } catch {
+                    if (request === figureSelectionRequest.current) setFigureSelectionError("无法读取所选文件，请检查文件内容或路径。");
+                    return;
+                  }
+                }
                 figureFile.set(fileDesc?.name ?? "");
                 submit();
               }}
@@ -661,6 +749,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               ]}
             />
           </div>
+          {figureSelectionError && <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)' }}>{figureSelectionError}</div>}
         </CommonOptions>}
       <CommonOptions title={t`z-index`} key="z-index">
         <input value={zIndex.value}
@@ -688,9 +777,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
         </CommonOptions>
       )}
 
-      {(isLive2DVariant || isSpineJsonFormat) && (
+      {(isLive2DVariant || isSpineJsonFormat || isGltfFormat) && (
         <>
-          <CommonOptions key="24" title={isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
+          <CommonOptions key="24" title={isGltfFormat ? 'glTF/Live2D 动作' : isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
             <SearchableCascader
               optionList={l2dMotionsList}
               value={currentMotion.value}
@@ -701,7 +790,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             />
           </CommonOptions>
           {!isSpineJsonFormat && (
-            <CommonOptions key="25" title={t`Live2D 表情`}>
+            <CommonOptions key="25" title={isGltfFormat ? (supportsLive2DExpressions ? 'glTF/Live2D 表情' : 'glTF 表情(当前模型不支持 Live2D 表情)') : t`Live2D 表情`}>
               <SearchableCascader
                 optionList={l2dExpressionsList}
                 value={currentExpression.value}
