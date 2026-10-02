@@ -27,6 +27,20 @@ async function jsonFile(path: string) {
   return JSON.parse(await fs.readFile(path, 'utf8'));
 }
 
+async function replaceFile(path: string, content: string) {
+  const temporary = `${path}.tmp`;
+  await fs.writeFile(temporary, content, 'utf8');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await fs.rename(temporary, path);
+      return;
+    } catch (error) {
+      if (attempt >= 4 || !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+      await new Promise((done) => setTimeout(done, 25 * (attempt + 1)));
+    }
+  }
+}
+
 interface FileMetadata<T> {
   size: number;
   mtimeMs: number;
@@ -37,7 +51,7 @@ interface ScanCache {
   configs: Map<string, FileMetadata<any>>;
   shaders: Map<string, FileMetadata<string[]>>;
 }
-// Retain only discovery metadata, not expression tables or GLB JSON payloads.
+// Cache discovery fields and editable parameter configs, not GLB payloads.
 const scanCaches = new Map<string, ScanCache>();
 function cacheFor(gameRoot: string) {
   let cache = scanCaches.get(gameRoot);
@@ -87,6 +101,7 @@ async function readMetadata<T>(
 
 function discoveryFields(manifest: any) {
   if (!Array.isArray(manifest?.components)) return {};
+  if (parameterDirectory(manifest)) return manifest;
   return {
     components: manifest.components.map((component) => {
       if (!component || typeof component !== 'object') return null;
@@ -110,6 +125,71 @@ function discoveryFields(manifest: any) {
       return result;
     }),
   };
+}
+
+const parameterTypes = new Set(['garupa-motion', 'garupa-expression']);
+
+function parameterDirectory(manifest: any) {
+  return (
+    Array.isArray(manifest?.components) &&
+    (manifest.components.length === 0 ||
+      manifest.components.some((component) =>
+        parameterTypes.has(component?.type),
+      ))
+  );
+}
+
+function parameterType(path: string) {
+  if (path.endsWith('.exp.json')) return 'garupa-expression';
+  if (path.endsWith('.mtn')) return 'garupa-motion';
+  return undefined;
+}
+
+function parameterComponents(root: string, components: any[], files: string[]) {
+  const retained = components.filter(
+    (component) => !parameterTypes.has(component?.type),
+  );
+  const previous = new Map<string, any>();
+  for (const component of components) {
+    if (
+      parameterTypes.has(component?.type) &&
+      typeof component.src === 'string'
+    ) {
+      let source: string;
+      try {
+        source = component.src.split('/').map(decodeURIComponent).join('/');
+      } catch {
+        continue;
+      }
+      previous.set(`${component.type}:${resolve(root, source)}`, component);
+    }
+  }
+  for (const file of files.sort((a, b) => a.localeCompare(b))) {
+    const type = parameterType(file);
+    const segments = relative(root, file).split(sep);
+    const relativePath = segments.join('/');
+    const src = segments.map(encodeURIComponent).join('/');
+    const name = relativePath.slice(
+      0,
+      -(type === 'garupa-motion' ? '.mtn'.length : '.exp.json'.length),
+    );
+    const existing = previous.get(`${type}:${file}`);
+    const component: any = { type, name };
+    if (existing?.description !== undefined)
+      component.description = existing.description;
+    component.src = src;
+    if (existing?.fade_in !== undefined) component.fade_in = existing.fade_in;
+    else if (type === 'garupa-motion') component.fade_in = 500;
+    if (existing?.fade_out !== undefined)
+      component.fade_out = existing.fade_out;
+    else if (type === 'garupa-motion') component.fade_out = 500;
+    for (const [key, value] of Object.entries(existing ?? {})) {
+      if (!(key in component) && !['name', 'src'].includes(key))
+        component[key] = value;
+    }
+    retained.push(component);
+  }
+  return retained;
 }
 
 function pruneMetadata<T>(
@@ -228,6 +308,7 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
   const issues: string[] = [];
   const identities = new Set<string>();
   const configPaths: string[] = [];
+  const parameterFiles: string[] = [];
   let directories = [figureRoot];
   while (directories.length) {
     const children = await mapConcurrent(directories, async (directory) => {
@@ -246,8 +327,9 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
           childDirectories.push(path);
           continue;
         }
-        if (!file.isFile() || file.name !== 'config.json') continue;
-        configPaths.push(path);
+        if (!file.isFile()) continue;
+        if (file.name === 'config.json') configPaths.push(path);
+        else if (parameterType(file.name)) parameterFiles.push(path);
       }
       return childDirectories;
     });
@@ -266,6 +348,35 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
       return { path, error };
     }
   });
+  const configDirectories = new Set(configPaths.map(dirname));
+  const parameterUpdates: { path: string; content: string }[] = [];
+  for (const item of manifests) {
+    if (!parameterDirectory(item.manifest)) continue;
+    const directory = dirname(item.path);
+    const files = parameterFiles.filter((file) => {
+      if (!inside(directory, file)) return false;
+      let owner = dirname(file);
+      while (owner !== directory) {
+        if (configDirectories.has(owner)) return false;
+        owner = dirname(owner);
+      }
+      return true;
+    });
+    const components = parameterComponents(
+      directory,
+      item.manifest.components,
+      files,
+    );
+    if (
+      JSON.stringify(components) !== JSON.stringify(item.manifest.components)
+    ) {
+      item.manifest = { ...item.manifest, components };
+      parameterUpdates.push({
+        path: item.path,
+        content: `${JSON.stringify(item.manifest, null, 2)}\n`,
+      });
+    }
+  }
   for (const { path, manifest, error } of manifests) {
     if (error) {
       issues.push(`${relative(figureRoot, path)}: ${error.message}`);
@@ -277,7 +388,10 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     );
     if (components.length !== manifest.components.length)
       issues.push(`${relative(figureRoot, path)}: invalid component`);
-    const models = components.filter((component) => component.type === 'model' && component.role === 'integrated');
+    const models = components.filter(
+      (component) =>
+        component.type === 'model' && component.role === 'integrated',
+    );
     if (models.length > 1)
       issues.push(
         `${relative(
@@ -386,16 +500,26 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     },
   );
   issues.push(...modelIssues.flat());
+  // All resource identities have been checked before modifying any package.
+  for (const update of parameterUpdates) {
+    await replaceFile(update.path, update.content);
+    cache.configs.delete(update.path);
+  }
   pruneMetadata(cache.configs, new Set(configPaths));
   pruneMetadata(cache.shaders, presentModels);
   resources.sort((a, b) =>
     `${a.type}:${a.name}`.localeCompare(`${b.type}:${b.name}`),
   );
-  const content = `${JSON.stringify({
-    说明: '本文件为WebGAL Terre LoveLive自动生成，请勿删除或修改，否则可能造成glTF模型与动作无法加载。若您不使用Terre进行编辑，在figure目录中增加glTF模型或动作后，需要手动编辑此文件，将其加入此列表。',
-    description: 'This file is automatically generated by WebGAL Terre LoveLive. Do not delete or modify it, as this may prevent glTF models and motions from loading. If you do not use Terre for editing, you must manually edit this file to add any glTF models or motions you add to the figure directory to this list.',
-    resources,
-  }, null, 2)}\n`;
+  const content = `${JSON.stringify(
+    {
+      说明: '本文件为WebGAL Terre LoveLive自动生成，请勿删除或修改，否则可能造成glTF模型与动作无法加载。若您不使用Terre进行编辑，在figure目录中增加glTF模型或动作后，需要手动编辑此文件，将其加入此列表。',
+      description:
+        'This file is automatically generated by WebGAL Terre LoveLive. Do not delete or modify it, as this may prevent glTF models and motions from loading. If you do not use Terre for editing, you must manually edit this file to add any glTF models or motions you add to the figure directory to this list.',
+      resources,
+    },
+    null,
+    2,
+  )}\n`;
   let existing;
   try {
     existing = await fs.readFile(catalogPath, 'utf8');
@@ -404,9 +528,7 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
   }
   if (existing !== content) {
     await fs.mkdir(dirname(catalogPath), { recursive: true });
-    const temporary = `${catalogPath}.tmp`;
-    await fs.writeFile(temporary, content, 'utf8');
-    await fs.rename(temporary, catalogPath);
+    await replaceFile(catalogPath, content);
   }
   return { enabled: true, resources, issues };
 }
