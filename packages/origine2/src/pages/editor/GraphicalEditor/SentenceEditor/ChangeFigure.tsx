@@ -21,7 +21,7 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
-import { canChooseFigureFile, catalogFigurePaths, gltfFigureOptions, gltfFigureSelectionError, GltfCatalogResult, isGltfConfigPath, isLoveliveEngine } from "@/utils/gltfFigure";
+import { canChooseFigureFile, catalogFigurePaths, gltfFigureOptions, gltfFigureSelectionError, GltfCatalogResult, isGltfConfigPath } from "@/utils/gltfFigure";
 import { eventBus } from "@/utils/eventBus";
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
@@ -70,40 +70,48 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const [spineSkinsList, setSpineSkinsList] = useState<string[]>([]);
   const [isSpineJsonFormat, setIsSpineJsonFormat] = useState(false);
   const [isJsonlFormat, setIsJsonlFormat] = useState(false);
-  const [gltfCatalog, setGltfCatalog] = useState<GltfCatalogResult>({ enabled: false, resources: [] });
+  const [gltfCatalog, setGltfCatalog] = useState<GltfCatalogResult>({ enabled: false, resources: [], revision: 0 });
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
   const catalogRequest = useRef(0);
   const catalogSignature = useRef<string | null>(null);
+  const catalogEnabled = useRef(false);
+  const catalogRefresh = useRef<{ gameDir: string; promise: Promise<void> } | null>(null);
   const refreshGltfCatalog = useCallback(async () => {
+    if (catalogRefresh.current?.gameDir === gameDir) return catalogRefresh.current.promise;
     const request = ++catalogRequest.current;
-    try {
-      const manifest = await axios.get(`/games/${encodeURIComponent(gameDir)}/webgal-engine.json`);
-      if (!isLoveliveEngine(manifest.data)) {
-        if (request === catalogRequest.current) setGltfCatalog({ enabled: false, resources: [] });
-        return;
-      }
-      const response = await axios.post<GltfCatalogResult>('/api/manageGame/updateGltfResourceCatalog', { gameName: gameDir });
-      if (request === catalogRequest.current) {
-        const signature = JSON.stringify(response.data.resources);
-        // The running preview caches its catalog. Newly discovered packages
-        // require a fresh preview, but unchanged scans must not restart it.
-        if (catalogSignature.current !== null && catalogSignature.current !== signature) {
-          eventBus.emit('iframe:refresh-game', null);
+    const promise = (async () => {
+      try {
+        const response = await axios.post<GltfCatalogResult>('/api/manageGame/updateGltfResourceCatalog', { gameName: gameDir });
+        if (request === catalogRequest.current) {
+          const signature = `${response.data.revision}:${response.data.enabled}`;
+          if (catalogSignature.current === signature) return;
+          // The running preview caches its catalog. Refresh it only when
+          // indexed content has changed.
+          if (catalogSignature.current !== null && (response.data.enabled || catalogEnabled.current)) {
+            eventBus.emit('iframe:refresh-game', null);
+          }
+          catalogSignature.current = signature;
+          catalogEnabled.current = response.data.enabled;
+          setGltfCatalog(response.data);
         }
-        catalogSignature.current = signature;
-        setGltfCatalog(response.data);
+      } catch (error) {
+        console.warn('glTF resource catalog could not be refreshed:', error);
       }
-    } catch (error) {
-      if (request === catalogRequest.current) setGltfCatalog({ enabled: false, resources: [] });
-      console.warn('glTF resource catalog could not be refreshed:', error);
-    }
+    })();
+    catalogRefresh.current = { gameDir, promise };
+    try { await promise; }
+    finally { if (catalogRefresh.current?.promise === promise) catalogRefresh.current = null; }
   }, [gameDir]);
   useEffect(() => {
     catalogSignature.current = null;
-    setGltfCatalog({ enabled: false, resources: [] });
+    catalogEnabled.current = false;
+    setGltfCatalog({ enabled: false, resources: [], revision: 0 });
     void refreshGltfCatalog();
-    return () => { catalogRequest.current += 1; };
+    return () => {
+      catalogRequest.current += 1;
+      catalogRefresh.current = null;
+    };
   }, [refreshGltfCatalog]);
   const gltfModelPaths = useMemo(() => catalogFigurePaths(gltfCatalog.resources), [gltfCatalog.resources]);
 
@@ -262,21 +270,27 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   };
 
   // 载入 motions / expressions（支持 .jsonl / .json / spine / .wmdl）
+  const loadedFigure = useRef<string | null>(null);
+  const selectedGltfCatalog = isGltfConfigPath(figureFile.value) ? gltfCatalog : null;
   useEffect(() => {
     const controller = new AbortController();
     const requestOptions = { signal: controller.signal };
     const cleanup = () => controller.abort();
-    // reset
-    setIsJsonlFormat(false);
-    setIsSpineJsonFormat(false);
-    setL2dMotionsList([]);
-    setL2dExpressionsList([]);
-    setSpineSkinsList([]);
-    setIsGltfFormat(false);
-    setSupportsLive2DExpressions(false);
-
     const pathRaw = figureFile.value || "";
     const pathLower = pathRaw.toLowerCase();
+    const figureKey = JSON.stringify([gameDir, pathRaw]);
+    const figureChanged = loadedFigure.current !== figureKey;
+    loadedFigure.current = figureKey;
+    // reset
+    if (figureChanged) {
+      setIsJsonlFormat(false);
+      setIsSpineJsonFormat(false);
+      setL2dMotionsList([]);
+      setL2dExpressionsList([]);
+      setSpineSkinsList([]);
+      setIsGltfFormat(false);
+      setSupportsLive2DExpressions(false);
+    }
 
     if (!pathRaw || pathRaw === "none") return cleanup;
 
@@ -295,6 +309,11 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           setL2dMotionsList(options.motions);
           setL2dExpressionsList(options.expressions);
         }).catch(error => { if (!controller.signal.aborted) console.warn('glTF figure could not be read:', error); });
+      } else {
+        setIsGltfFormat(false);
+        setSupportsLive2DExpressions(false);
+        setL2dMotionsList([]);
+        setL2dExpressionsList([]);
       }
       return cleanup;
     }
@@ -396,7 +415,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       }).catch(error => { if (!controller.signal.aborted) console.warn('WMDL could not be read:', error); });
     }
     return cleanup;
-  }, [figureFile.value, gameDir, gltfCatalog, gltfModelPaths]);
+  }, [figureFile.value, gameDir, selectedGltfCatalog]);
 
   useEffect(() => {
     /**
@@ -783,6 +802,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             <SearchableCascader
               optionList={l2dMotionsList}
               value={currentMotion.value}
+              onOpen={isGltfFormat ? () => { void refreshGltfCatalog(); } : undefined}
               onValueChange={(newValue) => {
                 newValue && currentMotion.set(newValue);
                 submit();
@@ -794,6 +814,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               <SearchableCascader
                 optionList={l2dExpressionsList}
                 value={currentExpression.value}
+                onOpen={isGltfFormat ? () => { void refreshGltfCatalog(); } : undefined}
                 onValueChange={(newValue) => {
                   newValue && currentExpression.set(newValue);
                   submit();

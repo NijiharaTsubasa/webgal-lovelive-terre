@@ -14,7 +14,6 @@ import { TemplateConfigDto } from '../manage-template/manage-template.dto';
 import { promisify } from 'util';
 import { execFile } from 'child_process';
 import { join } from 'path';
-import { generateGltfResourceCatalog } from './gltf-resource-catalog';
 import { UserDataService } from '../user-data/user-data.service';
 
 @Injectable()
@@ -24,7 +23,7 @@ export class ManageGameService {
     private readonly webgalFs: WebgalFsService,
   ) {}
 
-  async updateGltfResourceCatalog(gameName: string) {
+  async updateGltfResourceCatalog(gameName: string, rebuild = false) {
     if (
       typeof gameName !== 'string' ||
       !WebgalFsService.checkFileName(gameName) ||
@@ -34,11 +33,9 @@ export class ManageGameService {
     ) {
       throw new BadRequestException('Invalid game name');
     }
-    return generateGltfResourceCatalog(
-      this.webgalFs.getPathFromRoot(`public/games/${gameName}`),
-      false,
-      UserDataService.getEngineTemplateRoot(),
-    );
+    return rebuild
+      ? this.webgalFs.rebuildGltfCatalog(gameName)
+      : this.webgalFs.getGltfCatalog(gameName);
   }
 
   /**

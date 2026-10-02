@@ -23,6 +23,7 @@ describe('WebgalFsService', () => {
   });
 
   afterEach(async () => {
+    await service.onModuleDestroy();
     jest.restoreAllMocks();
     await fs.rm(testRoot, { recursive: true, force: true });
   });
@@ -77,6 +78,36 @@ describe('WebgalFsService', () => {
         'win32',
       ),
     ).toBe(false);
+  });
+
+  it('shares initialization across simultaneous catalog readers', async () => {
+    const games = join(testRoot, 'games');
+    const game = join(games, 'demo');
+    const config = join(game, 'game/figure/motions/config.json');
+    await fs.mkdir(join(config, '..'), { recursive: true });
+    await fs.writeFile(join(game, 'index.html'), '');
+    await fs.writeFile(
+      join(game, 'webgal-engine.json'),
+      JSON.stringify({ id: 'webgal-lovelive.lovelive' }),
+    );
+    await fs.writeFile(
+      config,
+      JSON.stringify({ components: [{ type: 'motion', name: 'idle' }] }),
+    );
+    jest
+      .spyOn(UserDataService, 'getGameRoot')
+      .mockImplementation((name) => (name ? join(games, name) : games));
+    jest
+      .spyOn(UserDataService, 'getEngineTemplateRoot')
+      .mockReturnValue(join(testRoot, 'template'));
+    const read = jest.spyOn(fs, 'readFile');
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => service.getGltfCatalog('demo')),
+    );
+    expect(results.every((result) => result.resources[0].name === 'idle')).toBe(
+      true,
+    );
+    expect(read.mock.calls.filter(([path]) => path === config)).toHaveLength(1);
   });
 
   it('rejects invalid marks in path segments', () => {

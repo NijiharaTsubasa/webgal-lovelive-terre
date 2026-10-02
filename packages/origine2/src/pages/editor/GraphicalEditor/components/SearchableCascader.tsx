@@ -21,6 +21,7 @@ interface CascaderProps {
   optionList: string[];
   value: string;
   onValueChange: (newValue: string | undefined) => void;
+  onOpen?: () => void;
 }
 
 const CASCADER_TRIGGER_THRESHOLD = 20; // 级联选择器触发阈值
@@ -29,6 +30,7 @@ export default function SearchableCascader ({
   optionList,
   value,
   onValueChange,
+  onOpen,
 }: CascaderProps) {
   const [openPopover, setOpenPopover] = useState(false);
   const [levelLabels, setLevelLabels] = useState<string[]>([]);
@@ -178,11 +180,13 @@ export default function SearchableCascader ({
         options={new Map(optionList.map(item => [item, item]))}
         value={value}
         onValueChange={(newValue) => onValueChange(newValue)}
+        onOpenChange={(_, data) => { if (data.open) onOpen?.(); }}
       />
       <Popover
         open={openPopover}
         onOpenChange={(_, data) => {
           if(data.open){
+            if (!openPopover) onOpen?.();
             setOpenPopover(true);
             setSearchTerm(''); // 重置搜索状态
             // 将显示值设置为当前选中值
@@ -196,10 +200,6 @@ export default function SearchableCascader ({
           {optionList.length > CASCADER_TRIGGER_THRESHOLD ? ( // 仅当选项数量超过阈值时才允许显示级联选择器
             <div
               className={styles.popoverTrigger}
-              onClick={() => {
-                if (!openPopover) { setOpenPopover(true); }
-                else if (!isPinned) { setOpenPopover(false); }
-              }}
             />
           ) : null}
         </PopoverTrigger>

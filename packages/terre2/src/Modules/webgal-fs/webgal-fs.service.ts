@@ -15,7 +15,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UserDataService } from '../user-data/user-data.service';
 import trash from 'trash';
-import { generateGltfResourceCatalog } from '../manage-game/gltf-resource-catalog';
+import { GltfCatalogIndex } from '../manage-game/gltf-catalog-index';
 
 const pExecFile = promisify(execFile);
 
@@ -44,6 +44,58 @@ interface FileList {
 export class WebgalFsService {
   constructor(private readonly logger: ConsoleLogger) {}
 
+  private catalogIndex?: GltfCatalogIndex;
+  private catalogRoot?: string;
+  private catalogOpening?: Promise<GltfCatalogIndex>;
+
+  private async getCatalogIndex() {
+    const root = UserDataService.getGameRoot();
+    if (this.catalogOpening) {
+      await this.catalogOpening;
+      return this.getCatalogIndex();
+    }
+    if (this.catalogRoot === root && this.catalogIndex)
+      return this.catalogIndex;
+    const opening = (async () => {
+      await this.catalogIndex?.close();
+      this.catalogRoot = root;
+      this.catalogIndex = new GltfCatalogIndex(
+        root,
+        UserDataService.getEngineTemplateRoot(),
+        (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
+      );
+      return this.catalogIndex;
+    })();
+    this.catalogOpening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this.catalogOpening === opening) this.catalogOpening = undefined;
+    }
+  }
+
+  async onApplicationBootstrap() {
+    try {
+      await (await this.getCatalogIndex()).start();
+    } catch (error) {
+      this.logger.warn(`glTF 资源索引初始化失败: ${String(error)}`);
+    }
+  }
+
+  async onModuleDestroy() {
+    await this.catalogIndex?.close();
+  }
+
+  async getGltfCatalog(gameName: string) {
+    return (await this.getCatalogIndex()).get(gameName);
+  }
+
+  async rebuildGltfCatalog(gameName: string) {
+    await this.catalogIndex?.close();
+    this.catalogRoot = undefined;
+    return this.getGltfCatalog(gameName);
+  }
+
   async refreshGltfCatalogForPath(path: string, changed = true) {
     try {
       const normalized = this.normalizeFsPath(path);
@@ -62,11 +114,9 @@ export class WebgalFsService {
         )
       )
         return;
-      await generateGltfResourceCatalog(
-        UserDataService.getGameRoot(gameName),
-        changed,
-        UserDataService.getEngineTemplateRoot(),
-      );
+      const index = await this.getCatalogIndex();
+      if (changed) await index.notify(normalized);
+      else await index.get(gameName);
     } catch (error) {
       this.logger.warn(`glTF 资源清单未更新: ${String(error)}`);
     }

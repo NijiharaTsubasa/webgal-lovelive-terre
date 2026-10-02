@@ -302,6 +302,11 @@ export class ManageGameController {
     return this.manageGame.updateGltfResourceCatalog(data.gameName);
   }
 
+  @Post('rebuildGltfResourceCatalog')
+  async rebuildGltfResourceCatalog(@Body() data: { gameName: string }) {
+    return this.manageGame.updateGltfResourceCatalog(data.gameName, true);
+  }
+
   @Get('getGameConfig/:gameName')
   @ApiOperation({ summary: 'Get Game Configuration' })
   @ApiResponse({ status: 200, description: 'Returned game configuration.' })

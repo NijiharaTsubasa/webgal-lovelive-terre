@@ -8,6 +8,7 @@ export interface GltfResourceEntry {
 export interface GltfCatalogResult {
   enabled: boolean;
   resources: GltfResourceEntry[];
+  revision: number;
   issues?: unknown[];
 }
 

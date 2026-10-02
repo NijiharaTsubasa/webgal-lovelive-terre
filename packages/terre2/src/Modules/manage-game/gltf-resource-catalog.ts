@@ -50,6 +50,37 @@ interface FileMetadata<T> {
 interface ScanCache {
   configs: Map<string, FileMetadata<any>>;
   shaders: Map<string, FileMetadata<string[]>>;
+  parameterPackages?: Map<
+    string,
+    { manifest: any; files: string[]; components: any[] }
+  >;
+  models?: Map<
+    string,
+    {
+      component: any;
+      context: string;
+      modelPath?: string;
+      dependencies: { type: string; name: string }[];
+      issues: string[];
+    }
+  >;
+}
+export interface CatalogInventory {
+  files: Set<string>;
+  cache?: ScanCache;
+  invalidated?: Set<string>;
+  cancelled?: boolean;
+}
+
+export class CatalogChangedError extends Error {}
+
+export function invalidateCatalogFile(
+  inventory: CatalogInventory,
+  path: string,
+) {
+  inventory.cache?.configs.delete(path);
+  inventory.cache?.shaders.delete(path);
+  (inventory.invalidated ??= new Set()).add(path);
 }
 // Cache discovery fields and editable parameter configs, not GLB payloads.
 const scanCaches = new Map<string, ScanCache>();
@@ -66,7 +97,9 @@ async function readMetadata<T>(
   path: string,
   cache: Map<string, FileMetadata<T>>,
   read: () => Promise<T>,
+  indexed = false,
 ) {
+  if (indexed && cache.has(path)) return cache.get(path).value;
   let stat;
   try {
     stat = await fs.stat(path);
@@ -91,7 +124,7 @@ async function readMetadata<T>(
       ctimeMs: stat.ctimeMs,
       value,
     });
-    if (cache.size > 10000) cache.delete(cache.keys().next().value);
+    if (!indexed && cache.size > 10000) cache.delete(cache.keys().next().value);
     return value;
   } catch (error) {
     cache.delete(path);
@@ -255,6 +288,7 @@ export async function generateGltfResourceCatalog(
   gameRoot: string,
   changed = false,
   defaultEngineRoot?: string,
+  inventory?: CatalogInventory,
 ) {
   gameRoot = resolve(gameRoot);
   const previous = pending.get(gameRoot);
@@ -267,7 +301,7 @@ export async function generateGltfResourceCatalog(
     let result;
     do {
       state.rerun = false;
-      result = await scan(gameRoot, defaultEngineRoot);
+      result = await scan(gameRoot, defaultEngineRoot, inventory);
     } while (state.rerun);
     return result;
   })();
@@ -279,7 +313,20 @@ export async function generateGltfResourceCatalog(
   }
 }
 
-async function scan(gameRoot: string, defaultEngineRoot?: string) {
+async function scan(
+  gameRoot: string,
+  defaultEngineRoot?: string,
+  inventory?: CatalogInventory,
+) {
+  if (inventory?.cancelled) throw new Error('glTF resource index was closed');
+  const changedPaths = new Set(inventory?.invalidated);
+  if (inventory?.invalidated) {
+    for (const path of inventory.invalidated) {
+      inventory.cache?.configs.delete(path);
+      inventory.cache?.shaders.delete(path);
+    }
+    inventory.invalidated.clear();
+  }
   let engine;
   let customEngine = true;
   try {
@@ -296,7 +343,9 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
   }
   if (engine?.id !== 'webgal-lovelive.lovelive')
     return { enabled: false, resources: [], issues: [] };
-  const cache = cacheFor(resolve(gameRoot));
+  const cache: ScanCache = inventory
+    ? (inventory.cache ??= { configs: new Map(), shaders: new Map() })
+    : cacheFor(resolve(gameRoot));
   const figureRoot = join(gameRoot, 'game', 'figure');
   const catalogPath = join(gameRoot, 'game', 'gltf-resources.json');
   const resources: GltfCatalogEntry[] = [];
@@ -309,7 +358,14 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
   const identities = new Set<string>();
   const configPaths: string[] = [];
   const parameterFiles: string[] = [];
-  let directories = [figureRoot];
+  if (inventory) {
+    for (const path of inventory.files) {
+      if (!inside(figureRoot, path)) continue;
+      if (path.endsWith(`${sep}config.json`)) configPaths.push(path);
+      else if (parameterType(path)) parameterFiles.push(path);
+    }
+  }
+  let directories = inventory ? [] : [figureRoot];
   while (directories.length) {
     const children = await mapConcurrent(directories, async (directory) => {
       let entries;
@@ -340,8 +396,11 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     try {
       return {
         path,
-        manifest: await readMetadata(path, cache.configs, async () =>
-          discoveryFields(await jsonFile(path)),
+        manifest: await readMetadata(
+          path,
+          cache.configs,
+          async () => discoveryFields(await jsonFile(path)),
+          Boolean(inventory),
         ),
       };
     } catch (error) {
@@ -349,24 +408,45 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     }
   });
   const configDirectories = new Set(configPaths.map(dirname));
+  const manifestSnapshots = new Map(
+    manifests
+      .filter((item) => parameterDirectory(item.manifest))
+      .map((item) => [item.path, JSON.stringify(item.manifest)]),
+  );
+  const ownedFiles = new Map<string, string[]>();
+  for (const file of parameterFiles) {
+    let owner = dirname(file);
+    while (inside(figureRoot, owner)) {
+      if (configDirectories.has(owner)) {
+        const files = ownedFiles.get(owner) ?? [];
+        files.push(file);
+        ownedFiles.set(owner, files);
+        break;
+      }
+      if (owner === figureRoot) break;
+      owner = dirname(owner);
+    }
+  }
   const parameterUpdates: { path: string; content: string }[] = [];
+  const parameterPackages = (cache.parameterPackages ??= new Map());
   for (const item of manifests) {
     if (!parameterDirectory(item.manifest)) continue;
     const directory = dirname(item.path);
-    const files = parameterFiles.filter((file) => {
-      if (!inside(directory, file)) return false;
-      let owner = dirname(file);
-      while (owner !== directory) {
-        if (configDirectories.has(owner)) return false;
-        owner = dirname(owner);
-      }
-      return true;
-    });
-    const components = parameterComponents(
-      directory,
-      item.manifest.components,
+    const files = (ownedFiles.get(directory) ?? []).sort();
+    const previousPackage = parameterPackages.get(item.path);
+    const sameFiles =
+      previousPackage &&
+      previousPackage.files.length === files.length &&
+      previousPackage.files.every((path, i) => path === files[i]);
+    const components =
+      previousPackage?.manifest === item.manifest && sameFiles
+        ? previousPackage.components
+        : parameterComponents(directory, item.manifest.components, files);
+    parameterPackages.set(item.path, {
+      manifest: item.manifest,
       files,
-    );
+      components,
+    });
     if (
       JSON.stringify(components) !== JSON.stringify(item.manifest.components)
     ) {
@@ -399,6 +479,10 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
           path,
         )}: one integrated model per selectable package required`,
       );
+    const config = relative(dirname(catalogPath), path)
+      .split(sep)
+      .map(encodeURIComponent)
+      .join('/');
     for (const component of components) {
       if (
         !resourceTypes.has(component.type) ||
@@ -428,10 +512,6 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
       if (identities.has(identity))
         throw new Error(`Duplicate glTF resource ${identity}`);
       identities.add(identity);
-      const config = relative(dirname(catalogPath), path)
-        .split(sep)
-        .map(encodeURIComponent)
-        .join('/');
       const entry = { type: component.type, name, config };
       resources.push(entry);
       definitions.push({ entry, component, path });
@@ -441,9 +521,31 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     (definition) => definition.entry.type === 'garupa-expression-adapter',
   );
   const presentModels = new Set<string>();
+  const modelCache = (cache.models ??= new Map());
   const modelIssues = await mapConcurrent(
     definitions.filter((definition) => definition.entry.type === 'model'),
     async ({ entry, component, path }) => {
+      const matchingAdapters = adapters.filter(
+        (definition) =>
+          definition.component.motionGroup === component.motionGroup,
+      );
+      const context = JSON.stringify([
+        matchingAdapters.map((definition) => definition.entry.name),
+        identities.has(`garupa-motion:${component.defaultMotion}`),
+        identities.has(`motion:${component.defaultMotion}`),
+      ]);
+      const cachedModel = modelCache.get(path);
+      if (
+        inventory &&
+        cachedModel?.component === component &&
+        cachedModel.context === context &&
+        !changedPaths.has(cachedModel.modelPath)
+      ) {
+        if (cachedModel.modelPath) presentModels.add(cachedModel.modelPath);
+        if (cachedModel.dependencies.length)
+          entry.dependencies = cachedModel.dependencies;
+        return cachedModel.issues;
+      }
       const localIssues: string[] = [];
       const dependencies: { type: string; name: string }[] = [];
       for (const behavior of Array.isArray(component.behaviors)
@@ -461,10 +563,7 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
               : 'motion',
           name: component.defaultMotion,
         });
-      for (const adapter of adapters.filter(
-        (definition) =>
-          definition.component.motionGroup === component.motionGroup,
-      )) {
+      for (const adapter of matchingAdapters) {
         dependencies.push({
           type: adapter.entry.type,
           name: adapter.entry.name,
@@ -476,11 +575,15 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
         try {
           if (
             !inside(figureRoot, modelPath) ||
-            !inside(figureRoot, await fs.realpath(modelPath))
+            (!(inventory && cache.shaders.has(modelPath)) &&
+              !inside(figureRoot, await fs.realpath(modelPath)))
           )
             throw new Error('Model outside figure directory');
-          for (const name of await readMetadata(modelPath, cache.shaders, () =>
-            materialShaders(modelPath),
+          for (const name of await readMetadata(
+            modelPath,
+            cache.shaders,
+            () => materialShaders(modelPath),
+            Boolean(inventory),
           ))
             dependencies.push({ type: 'shader', name });
         } catch (error) {
@@ -496,20 +599,53 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
               (other) => other.type === item.type && other.name === item.name,
             ) === i,
         );
+      modelCache.set(path, {
+        component,
+        context,
+        modelPath:
+          typeof component.model === 'string'
+            ? resolve(dirname(path), component.model)
+            : undefined,
+        dependencies: entry.dependencies ?? [],
+        issues: localIssues,
+      });
       return localIssues;
     },
   );
   issues.push(...modelIssues.flat());
   // All resource identities have been checked before modifying any package.
   for (const update of parameterUpdates) {
+    if (inventory?.cancelled) throw new Error('glTF resource index was closed');
+    let current;
+    try {
+      current = discoveryFields(await jsonFile(update.path));
+    } catch (error) {
+      if (inventory) {
+        invalidateCatalogFile(inventory, update.path);
+        if (error.code === 'ENOENT') inventory.files.delete(update.path);
+        throw new CatalogChangedError(
+          'Parameter config changed during indexing',
+        );
+      }
+      throw error;
+    }
+    if (JSON.stringify(current) !== manifestSnapshots.get(update.path)) {
+      if (inventory) invalidateCatalogFile(inventory, update.path);
+      throw new CatalogChangedError('Parameter config changed during indexing');
+    }
     await replaceFile(update.path, update.content);
     cache.configs.delete(update.path);
   }
   pruneMetadata(cache.configs, new Set(configPaths));
   pruneMetadata(cache.shaders, presentModels);
-  resources.sort((a, b) =>
-    `${a.type}:${a.name}`.localeCompare(`${b.type}:${b.name}`),
-  );
+  for (const path of parameterPackages.keys())
+    if (!configDirectories.has(dirname(path))) parameterPackages.delete(path);
+  for (const path of modelCache.keys())
+    if (!configDirectories.has(dirname(path))) modelCache.delete(path);
+  resources.sort((a, b) => {
+    if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+    return a.name === b.name ? 0 : a.name < b.name ? -1 : 1;
+  });
   const content = `${JSON.stringify(
     {
       说明: '本文件为WebGAL Terre LoveLive自动生成，请勿删除或修改，否则可能造成glTF模型与动作无法加载。若您不使用Terre进行编辑，在figure目录中增加glTF模型或动作后，需要手动编辑此文件，将其加入此列表。',
@@ -527,7 +663,14 @@ async function scan(gameRoot: string, defaultEngineRoot?: string) {
     if (error.code !== 'ENOENT') throw error;
   }
   if (existing !== content) {
-    await fs.mkdir(dirname(catalogPath), { recursive: true });
+    if (inventory?.cancelled) throw new Error('glTF resource index was closed');
+    // Never recreate a game that was removed while indexing was in progress.
+    await fs.access(gameRoot);
+    try {
+      await fs.mkdir(dirname(catalogPath));
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
     await replaceFile(catalogPath, content);
   }
   return { enabled: true, resources, issues };
