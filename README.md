@@ -10,9 +10,9 @@
 
 1、首先在 `figure` 目录下创建一个新目录，名称任意，例如 `bangdream_live2d` ，后续 3D 立绘会从此目录读取表情和动作。
 
-2、找到已有的 BanG Dream Live2D 表情和动作，一般位于 `figure/任意mygo_mujica角色/.mtn_exp/expressions/__base__/` 和 `figure/任意mygo_mujica角色/.mtn_exp/motions/PARAM_IMPORT__数字/` 这两个路径，将其中的全部角色名文件夹复制到上一步新建的目录。
+2、找到已有的 BanG Dream Live2D 表情和动作，一般位于 `figure/任意mygo_mujica角色/.mtn_exp/expressions/__base__/` 和 `figure/任意mygo_mujica角色/.mtn_exp/motions/PARAM_IMPORT__数字/` 这两个路径，将其中的全部角色名文件夹复制到上一步新建的目录。同名角色文件夹请合并，保留其中的动作和表情文件。
 
-若没有.mtn_exp目录，请在文件夹选项中打开“显示隐藏的文件、文件夹和驱动器”。
+若看不到 `.mtn_exp` 目录，请在文件夹选项中打开“显示隐藏的文件、文件夹和驱动器”。
 
 复制好后目录结构应该如下所示：
 ```
