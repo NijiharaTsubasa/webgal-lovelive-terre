@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
-import { join } from 'path';
+import * as nativeFs from 'fs';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { GltfCatalogIndex } from './gltf-catalog-index';
 import * as catalog from './gltf-resource-catalog';
@@ -65,6 +66,115 @@ describe('watched glTF catalog', () => {
     expect(read).not.toHaveBeenCalled();
     expect(stat).not.toHaveBeenCalled();
     expect(dirs).not.toHaveBeenCalled();
+  });
+
+  for (const startup of [false, true]) {
+    it(`recovers EBUSY during ${startup ? 'startup' : 'external copying'} and continues observing edits and removal`, async () => {
+      if (startup) await index.close();
+      const configPath = join(root, game, 'game/figure/copied/config.json');
+      const glbPath = join(root, game, 'game/figure/copied/model.glb');
+      const writeGlb = async (shader: string) => {
+        const json = Buffer.from(JSON.stringify({ materials: [{ extras: { shader } }] }));
+        const header = Buffer.alloc(20);
+        header.writeUInt32LE(0x46546c67, 0);
+        header.writeUInt32LE(json.length, 12);
+        header.writeUInt32LE(0x4e4f534a, 16);
+        await fs.writeFile(glbPath, Buffer.concat([header, json]));
+      };
+      const original = nativeFs.watch;
+      let locked = true;
+      let attempts = 0;
+      jest.spyOn(nativeFs, 'watch').mockImplementation(((path, ...args) => {
+        if (resolve(String(path)) === glbPath) {
+          attempts++;
+          if (locked) throw Object.assign(new Error(`EBUSY: watch '${glbPath}'`), { code: 'EBUSY', path: glbPath });
+        }
+        return original(path, ...args);
+      }) as typeof nativeFs.watch);
+      await put('game/figure/copied/config.json', { components: [{ type: 'model', role: 'integrated', name: 'copied', model: 'model.glb' }] });
+      await writeGlb('before');
+      if (startup) {
+        index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error));
+        await index.start();
+      }
+      const deadline = Date.now() + 3000;
+      while (!attempts && Date.now() < deadline) await new Promise(done => setTimeout(done, 20));
+      expect(attempts).toBeGreaterThan(0);
+      await put('game/figure/parameters/available.mtn', '# test');
+      const duringCopy = await until(result => result.resources.some(resource => resource.name === 'available'));
+      expect(duringCopy.resources.some(resource => resource.name === 'copied')).toBe(false);
+      expect(errors.filter(error => (error as NodeJS.ErrnoException).path === glbPath)).toHaveLength(1);
+      locked = false;
+      await until(result => result.resources.some(resource => resource.name === 'copied'));
+      const retryDeadline = Date.now() + 3000;
+      while (attempts < 2 && Date.now() < retryDeadline) await new Promise(done => setTimeout(done, 20));
+      expect(attempts).toBeGreaterThan(1);
+      // Allow the newly registered native watcher to settle before testing events.
+      await new Promise(done => setTimeout(done, 350));
+      await writeGlb('after');
+      await until(result => result.resources.find(resource => resource.name === 'copied')?.dependencies.some(dependency => dependency.name === 'after'));
+      await fs.unlink(glbPath);
+      await until(result => result.issues.some(issue => issue.includes('copied: shader hints unavailable')));
+      await put('game/figure/copied/config.json', { components: [{ type: 'model', role: 'integrated', name: 'edited' }] });
+      await until(result => result.resources.some(resource => resource.name === 'edited') && !result.resources.some(resource => resource.name === 'copied'));
+      await fs.unlink(configPath);
+      await until(result => !result.resources.some(resource => resource.name === 'edited'));
+    });
+  }
+
+  it('keeps permanent watcher errors visible and stops lock retries on close', async () => {
+    const watcher = (index as unknown as { watcher: { emit: (event: string, error: Error) => void } }).watcher;
+    watcher.emit('error', Object.assign(new Error('watch denied'), { code: 'EACCES', path: join(root, game, 'game/figure/parameters/config.json') }));
+    await expect(index.get(game)).rejects.toThrow('watch denied');
+    await index.close();
+    index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error));
+    await index.start();
+    const path = join(root, game, 'game/figure/locked/config.json');
+    const original = nativeFs.watch;
+    let attempts = 0;
+    jest.spyOn(nativeFs, 'watch').mockImplementation(((file, ...args) => {
+      if (resolve(String(file)) === path) {
+        attempts++;
+        throw Object.assign(new Error('locked'), { code: 'EBUSY', path });
+      }
+      return original(file, ...args);
+    }) as typeof nativeFs.watch);
+    await put('game/figure/locked/config.json', { components: [] });
+    const deadline = Date.now() + 3000;
+    while (!attempts && Date.now() < deadline) await new Promise(done => setTimeout(done, 20));
+    expect(attempts).toBeGreaterThan(0);
+    await index.close();
+    const stopped = attempts;
+    await new Promise(done => setTimeout(done, 600));
+    expect(attempts).toBe(stopped);
+  });
+
+  it('handles a locked target removed before retry and observes later recreation', async () => {
+    const path = await put('game/figure/parameters/removed.mtn', '# test');
+    await until(result => result.resources.some(resource => resource.name === 'removed'));
+    const watcher = (index as unknown as { watcher: { emit: (event: string, error: Error) => void } }).watcher;
+    watcher.emit('error', Object.assign(new Error('locked'), { code: 'EBUSY', path }));
+    await fs.unlink(path);
+    await until(result => !result.resources.some(resource => resource.name === 'removed'));
+    await new Promise(done => setTimeout(done, 350));
+    await put('game/figure/parameters/removed.mtn', '# recreated');
+    await until(result => result.resources.some(resource => resource.name === 'removed'));
+    await fs.unlink(path);
+    await until(result => !result.resources.some(resource => resource.name === 'removed'));
+  });
+
+  it('preserves ready resources without duplicates when two targets in one package recover', async () => {
+    const first = await put('game/figure/parameters/first.mtn', '# first');
+    const second = await put('game/figure/parameters/second.mtn', '# second');
+    await until(result => result.resources.length === 2);
+    const watcher = (index as unknown as { watcher: { emit: (event: string, error: Error) => void } }).watcher;
+    for (const path of [first, second]) watcher.emit('error', Object.assign(new Error('locked'), { code: 'EBUSY', path }));
+    const preserved = await index.get(game);
+    expect(preserved.resources.map(resource => resource.name).sort()).toEqual(['first', 'second']);
+    await until(result => result.resources.length === 2 && result.revision > preserved.revision);
+    await put('game/figure/parameters/later.mtn', '# later');
+    await until(result => result.resources.length === 3);
+    expect((await index.get(game)).resources.map(resource => resource.name).sort()).toEqual(['first', 'later', 'second']);
   });
 
   it('discovers externally copied, renamed and deleted nested motions and expressions', async () => {

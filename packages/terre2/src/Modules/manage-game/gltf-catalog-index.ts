@@ -2,6 +2,7 @@ import { watch, FSWatcher } from 'chokidar';
 import * as fs from 'fs/promises';
 import {
   basename,
+  dirname,
   extname,
   isAbsolute,
   join,
@@ -28,6 +29,13 @@ interface GameIndex {
   observed: Map<string, string>;
 }
 
+interface WatchRecovery {
+  attempts: number;
+  timer?: ReturnType<typeof setTimeout>;
+  operation?: Promise<void>;
+  previous: Awaited<ReturnType<typeof generateGltfResourceCatalog>>['resources'];
+}
+
 /** Owns filesystem discovery; catalog readers never walk the figure tree. */
 export class GltfCatalogIndex {
   private watcher?: FSWatcher;
@@ -36,6 +44,7 @@ export class GltfCatalogIndex {
   private ready = false;
   private closed = false;
   private watchError?: Error;
+  private recoveries = new Map<string, WatchRecovery>();
 
   constructor(
     private readonly root: string,
@@ -59,6 +68,17 @@ export class GltfCatalogIndex {
         (basename(inner) === 'config.json' ||
           /\.(?:mtn|glb)$/.test(inner) ||
           inner.endsWith('.exp.json')))
+    );
+  }
+
+  private recoveryDirectory(path: string) {
+    const location = this.locate(path);
+    return location && this.relevant(location.inner) ? dirname(path) : path;
+  }
+
+  private recovering(path: string) {
+    return [...this.recoveries.keys()].some(target =>
+      path === target || path.startsWith(`${this.recoveryDirectory(target)}${sep}`),
     );
   }
 
@@ -117,6 +137,7 @@ export class GltfCatalogIndex {
             ? watched
             : resolve(watched, path);
         const location = this.locate(candidate);
+        if (this.recovering(candidate)) return;
         if (
           location &&
           (this.relevant(location.inner) ||
@@ -127,6 +148,8 @@ export class GltfCatalogIndex {
         }
       });
       this.watcher.on('error', (error: Error) => {
+        if (this.closed) return;
+        if (this.retryBusyWatch(error)) return;
         this.watchError = error;
         this.report(error);
         if (!this.ready) reject(error);
@@ -146,6 +169,105 @@ export class GltfCatalogIndex {
       });
     });
     return this.starting;
+  }
+
+  private retryBusyWatch(error: NodeJS.ErrnoException) {
+    if (error.code !== 'EBUSY' || typeof error.path !== 'string') return false;
+    const path = resolve(error.path);
+    const location = this.locate(path);
+    if (!location || (!this.relevant(location.inner) && location.inner !== 'game/figure' && !location.inner.startsWith('game/figure/'))) return false;
+    const existing = this.recoveries.get(path);
+    const recovery = existing ?? { attempts: 0, previous: this.state(location.game).result?.resources ?? [] };
+    if (recovery.timer) clearTimeout(recovery.timer);
+    if (!existing) this.report(error);
+    this.recoveries.set(path, recovery);
+    recovery.timer = setTimeout(() => {
+      recovery.timer = undefined;
+      recovery.operation = this.restoreWatch(path, recovery).catch(failure => {
+        if (this.closed || this.retryBusyWatch(failure)) return;
+        this.watchError = failure;
+        this.report(failure);
+        this.recoveries.delete(path);
+      }).finally(() => { recovery.operation = undefined; });
+    }, Math.min(250 * 2 ** Math.min(recovery.attempts, 3), 2000));
+    return true;
+  }
+
+  private async restoreWatch(path: string, recovery: WatchRecovery) {
+    if (this.closed) return;
+    recovery.attempts++;
+    let stat;
+    try {
+      stat = await fs.lstat(path);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (this.closed) return;
+      await this.watcher.unwatch(path);
+      if (this.closed) return;
+      this.watcher.add(path);
+      this.record('unlink', path);
+      this.record('unlinkDir', path);
+      this.recoveries.delete(path);
+      return;
+    }
+    if (this.closed) return;
+    if (stat.isSymbolicLink()) {
+      this.recoveries.delete(path);
+      return;
+    }
+    // unwatch removes Chokidar's retained directory entry from the failed add.
+    // add then registers native watchers again, only under the failed target.
+    await this.watcher.unwatch(path);
+    if (this.closed) return;
+    this.watcher.add(path);
+    this.settleRecoveredWatch(path, recovery, stat);
+  }
+
+  private settleRecoveredWatch(path: string, recovery: WatchRecovery, previous: Awaited<ReturnType<typeof fs.lstat>>) {
+    // add is asynchronous; another EBUSY replaces this timer with a local retry.
+    recovery.timer = setTimeout(() => {
+      recovery.timer = undefined;
+      recovery.operation = (async () => {
+        let current;
+        try { current = await fs.lstat(path); }
+        catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          if (this.closed) return;
+          await this.watcher.unwatch(path);
+          if (this.closed) return;
+          this.watcher.add(path);
+          this.record('unlink', path);
+          this.record('unlinkDir', path);
+          this.recoveries.delete(path);
+          return;
+        }
+        if (this.closed || recovery.timer) return;
+        if (current.size !== previous.size || current.mtimeMs !== previous.mtimeMs || current.ctimeMs !== previous.ctimeMs) {
+          this.settleRecoveredWatch(path, recovery, current);
+          return;
+        }
+        this.recoveries.delete(path);
+        const location = this.locate(path);
+        if (!location) return;
+        const state = this.games.get(location.game);
+        const directory = current.isDirectory() ? path : dirname(path);
+        if (current.isFile()) {
+          state?.observed.delete(path);
+          this.record('change', path, current);
+        }
+        for (const file of state?.inventory.files ?? []) {
+          if (file === path || file.startsWith(`${directory}${sep}`)) {
+            state.observed.delete(file);
+            this.record('change', file);
+          }
+        }
+      })().catch(error => {
+        if (this.closed || this.retryBusyWatch(error)) return;
+        this.watchError = error;
+        this.report(error);
+        this.recoveries.delete(path);
+      }).finally(() => { recovery.operation = undefined; });
+    }, 250);
   }
 
   private record(
@@ -210,12 +332,24 @@ export class GltfCatalogIndex {
       while (state.dirty && !this.closed) {
         state.dirty = false;
         try {
-          state.result = await generateGltfResourceCatalog(
+          const result = await generateGltfResourceCatalog(
             join(this.root, game),
             false,
             this.engineRoot,
             state.inventory,
           );
+          for (const [path, recovery] of this.recoveries) {
+            const location = this.locate(path);
+            if (location?.game !== game) continue;
+            const directory = this.recoveryDirectory(path);
+            const affected = (entry: typeof result.resources[number]) => {
+              const config = resolve(this.root, game, 'game', ...entry.config.split('/').map(decodeURIComponent));
+              return config.startsWith(`${directory}${sep}`);
+            };
+            result.resources = [...result.resources.filter(entry => !affected(entry)), ...recovery.previous.filter(affected)];
+          }
+          result.resources = [...new Map(result.resources.map(entry => [`${entry.type}:${entry.name}`, entry])).values()];
+          state.result = result;
           state.revision++;
           state.error = undefined;
         } catch (error) {
@@ -292,14 +426,18 @@ export class GltfCatalogIndex {
 
   async close() {
     this.closed = true;
+    for (const recovery of this.recoveries.values()) {
+      if (recovery.timer) clearTimeout(recovery.timer);
+    }
     for (const state of this.games.values()) {
       state.inventory.cancelled = true;
       if (state.timer) clearTimeout(state.timer);
     }
     await this.watcher?.close();
     await Promise.allSettled(
-      [...this.games.values()].map((state) => state.operation),
+      [...this.games.values()].map((state) => state.operation).concat([...this.recoveries.values()].map(recovery => recovery.operation)),
     );
     this.games.clear();
+    this.recoveries.clear();
   }
 }

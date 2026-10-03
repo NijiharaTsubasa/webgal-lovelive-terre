@@ -77,8 +77,10 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const catalogSignature = useRef<string | null>(null);
   const catalogEnabled = useRef(false);
   const catalogRefresh = useRef<{ gameDir: string; promise: Promise<void> } | null>(null);
-  const refreshGltfCatalog = useCallback(async () => {
-    if (catalogRefresh.current?.gameDir === gameDir) return catalogRefresh.current.promise;
+  const refreshGltfCatalog = useCallback(async (force = false) => {
+    if (!force && catalogRefresh.current?.gameDir === gameDir) {
+      return catalogRefresh.current.promise;
+    }
     const request = ++catalogRequest.current;
     const promise = (async () => {
       try {
@@ -747,6 +749,11 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               onChange={async (fileDesc) => {
                 const request = ++figureSelectionRequest.current;
                 setFigureSelectionError("");
+                if (fileDesc && isGltfConfigPath(fileDesc.name)) {
+                  // The open picker may have indexed files copied after the panel's last refresh.
+                  await refreshGltfCatalog(true);
+                  if (request !== figureSelectionRequest.current) return;
+                }
                 if (gltfCatalog.enabled && fileDesc && /\.json$/i.test(fileDesc.name)) {
                   try {
                     const response = await axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${fileDesc.name.split('/').map(encodeURIComponent).join('/')}`);
