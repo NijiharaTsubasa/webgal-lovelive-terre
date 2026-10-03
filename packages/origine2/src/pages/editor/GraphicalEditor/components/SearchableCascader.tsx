@@ -19,6 +19,7 @@ export interface CascaderOptionNode {
 
 interface CascaderProps {
   optionList: string[];
+  optionDescriptions?: ReadonlyMap<string, string>;
   value: string;
   onValueChange: (newValue: string | undefined) => void;
   onOpen?: () => void;
@@ -28,6 +29,7 @@ const CASCADER_TRIGGER_THRESHOLD = 20; // 级联选择器触发阈值
 
 export default function SearchableCascader ({
   optionList,
+  optionDescriptions,
   value,
   onValueChange,
   onOpen,
@@ -41,6 +43,16 @@ export default function SearchableCascader ({
   const updateIsCascaderDelimitersCustomizable = useEditorStore.use.updateIsCascaderDelimitersCustomizable();
   const cascaderDelimiters = useEditorStore.use.cascaderDelimiters();
   const updateCascaderDelimiters = useEditorStore.use.updateCascaderDelimiters();
+  const displayLabel = useCallback((option: string, label = option) => {
+    const description = optionDescriptions?.get(option);
+    return description ? `${label} ${description}` : label;
+  }, [optionDescriptions]);
+  const renderLabel = useCallback((option: string, label: string) => (
+    <span className={styles.optionLabel}>
+      <span>{label}</span>
+      {optionDescriptions?.get(option) && <span className={styles.optionDescription}>{optionDescriptions.get(option)}</span>}
+    </span>
+  ), [optionDescriptions]);
 
   // 生成级联选项数据
   const options = useMemo(() => getCascaderOptions(optionList, cascaderDelimiters), [optionList, cascaderDelimiters]);
@@ -91,7 +103,7 @@ export default function SearchableCascader ({
               <Option
                 key={label}
                 value={node.value}
-                text={label}
+                text={node.children.size === 0 ? displayLabel(node.value, label) : label}
                 className={
                   styles.cascadeOption +
                   (levelLabels[i] === label ? ' ' + styles.cascadeOptionActive : '')
@@ -99,7 +111,7 @@ export default function SearchableCascader ({
                 onClick={() => handleNodeClick(i, label, node)}
               >
                 <div className={styles.cascadeOptionContent}>
-                  <div className={styles.cascadeOptionText}>{label}</div>
+                  <div className={styles.cascadeOptionText}>{node.children.size === 0 ? renderLabel(node.value, label) : label}</div>
                   {node.children && node.children.size > 0 ? (
                     <div className={styles.arrow}>&gt;</div>
                   ) : null}
@@ -111,7 +123,7 @@ export default function SearchableCascader ({
       );
     }
     return levels;
-  }, [options, levelLabels, isPinned]);
+  }, [options, levelLabels, isPinned, displayLabel, renderLabel]);
 
   // 处理搜索框输入变化
   const handleInputChange = debounce((input:string)=> {
@@ -144,13 +156,14 @@ export default function SearchableCascader ({
     const searchList = searchTerm.toLowerCase().split(' ').filter(Boolean);
     const result = [];
     for (let option of optionList) {
-      const optionText = option.toLowerCase();
+      const label = displayLabel(option);
+      const optionText = label.toLowerCase();
       if (searchList.length === 0 || searchList.every(term => optionText.includes(term))) {
         result.push(
           <Option
             key={option}
             value={option}
-            text={option}
+            text={label}
             className={
               styles.cascadeOption +
               (option===value ? ' ' + styles.cascadeOptionActive : '')
@@ -159,7 +172,10 @@ export default function SearchableCascader ({
           >
             <div className={styles.cascadeOptionContent}>
               <div className={styles.cascadeOptionText}>
-                {highlightText(option, searchList)}
+                <span className={styles.optionLabel}>
+                  <span>{highlightText(option, searchList)}</span>
+                  {optionDescriptions?.get(option) && <span className={styles.optionDescription}>{highlightText(optionDescriptions.get(option)!, searchList)}</span>}
+                </span>
               </div>
             </div>
           </Option>
@@ -172,12 +188,13 @@ export default function SearchableCascader ({
       );
     }
     return result;
-  }, [searchTerm, optionList, value, isPinned]);
+  }, [searchTerm, optionList, value, isPinned, displayLabel]);
 
   return (
     <div className={styles.searchableCascader}>
       <WheelDropdown
         options={new Map(optionList.map(item => [item, item]))}
+        renderOption={optionDescriptions ? renderLabel : undefined}
         value={value}
         onValueChange={(newValue) => onValueChange(newValue)}
         onOpenChange={(_, data) => { if (data.open) onOpen?.(); }}

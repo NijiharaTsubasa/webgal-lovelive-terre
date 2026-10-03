@@ -20,6 +20,28 @@ describe('glTF resource catalog', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it('indexes native motion descriptions and refreshes description-only edits', async () => {
+    const path = 'game/figure/motions/config.json';
+    const config = (description: string) => ({ components: [
+      { type: 'motion', name: 'hasunosora/mot_00_02070', description, src: 'drag.motbin' },
+      { type: 'motion', name: 'llas/idle', description: '', src: 'idle.motbin' },
+    ] });
+    await put(path, config('被拖走'));
+    const first = await generateGltfResourceCatalog(root);
+    expect(first.resources.find(entry => entry.name === 'hasunosora/mot_00_02070')).toMatchObject({
+      description: '被拖走',
+    });
+    expect(first.resources.find(entry => entry.name === 'llas/idle')).not.toHaveProperty('description');
+    await put(path, config('被拉走'));
+    const file = join(root, path);
+    const stamp = (await fs.stat(file)).mtimeMs;
+    await fs.utimes(file, new Date(stamp + 1000), new Date(stamp + 1000));
+    const updated = await generateGltfResourceCatalog(root);
+    expect(updated.resources.find(entry => entry.name === 'hasunosora/mot_00_02070')).toMatchObject({
+      description: '被拉走',
+    });
+  });
+
   it('reuses only unchanged discovery metadata and sees external edits and removal', async () => {
     const configPath = join(root, 'game/figure/model/config.json');
     const glbPath = join(root, 'game/figure/model/model.glb');

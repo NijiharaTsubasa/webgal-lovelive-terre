@@ -107,6 +107,19 @@
   transition: all 0.2s ease-in-out;
 }
 
+.optionLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.optionDescription {
+  color: var(--text-weak);
+  font-size: 12px;
+  font-style: italic;
+}
+
 .arrow {
   color: gray;
   font-size: 14px;

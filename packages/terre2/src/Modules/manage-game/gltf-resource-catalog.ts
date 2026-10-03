@@ -15,6 +15,7 @@ export interface GltfCatalogEntry {
   type: string;
   name: string;
   config: string;
+  description?: string;
   dependencies?: { type: string; name: string }[];
 }
 
@@ -155,6 +156,8 @@ function discoveryFields(manifest: any) {
         result.behaviors = component.behaviors
           .filter((behavior) => typeof behavior?.name === 'string')
           .map(({ name }) => ({ name }));
+      if (component.type === 'motion' && typeof component.description === 'string')
+        result.description = component.description;
       return result;
     }),
   };
@@ -512,7 +515,9 @@ async function scan(
       if (identities.has(identity))
         throw new Error(`Duplicate glTF resource ${identity}`);
       identities.add(identity);
-      const entry = { type: component.type, name, config };
+      const entry: GltfCatalogEntry = { type: component.type, name, config };
+      if (component.type === 'motion' && typeof component.description === 'string' && component.description.trim())
+        entry.description = component.description;
       resources.push(entry);
       definitions.push({ entry, component, path });
     }

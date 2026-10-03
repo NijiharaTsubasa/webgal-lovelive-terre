@@ -114,6 +114,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
     };
   }, [refreshGltfCatalog]);
   const gltfModelPaths = useMemo(() => catalogFigurePaths(gltfCatalog.resources), [gltfCatalog.resources]);
+  const motionDescriptions = useMemo(() => new Map(gltfCatalog.resources
+    .filter(entry => entry.type === 'motion' && typeof entry.description === 'string' && entry.description.trim())
+    .map(entry => [entry.name, entry.description!])), [gltfCatalog.resources]);
 
   const currentMotion = useValue(getArgByKey(props.sentence, "motion").toString() ?? "");
   const currentExpression = useValue(
@@ -801,6 +804,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           <CommonOptions key="24" title={isGltfFormat ? 'glTF/Live2D 动作' : isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
             <SearchableCascader
               optionList={l2dMotionsList}
+              optionDescriptions={isGltfFormat ? motionDescriptions : undefined}
               value={currentMotion.value}
               onOpen={isGltfFormat ? () => { void refreshGltfCatalog(); } : undefined}
               onValueChange={(newValue) => {

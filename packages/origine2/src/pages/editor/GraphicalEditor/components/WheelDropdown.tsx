@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, ReactNode } from 'react';
 import { Dropdown, Option, DropdownProps } from "@fluentui/react-components";
 import debounce from 'lodash/debounce';
 
@@ -6,12 +6,14 @@ interface WheelDropdownProps extends DropdownProps {
   options: Map<string, string>;
   value: string;
   onValueChange: (newValue: string | undefined) => void;
+  renderOption?: (value: string, label: string) => ReactNode;
 }
 
 export default function WheelDropdown({
   options,
   value,
   onValueChange,
+  renderOption,
   ...restProps
 }: WheelDropdownProps) {
   const dropdownRef = useRef<HTMLButtonElement>(null);
@@ -67,12 +69,13 @@ export default function WheelDropdown({
       ref={dropdownRef}
       value={options.get(internalValue) ?? internalValue}
       selectedOptions={[internalValue]}
+      button={renderOption ? { children: renderOption(internalValue, options.get(internalValue) ?? internalValue) } : undefined}
       onOptionSelect={(_, data) => onValueChange(data.optionValue)}
       style={{ minWidth: 0 }}
       {...restProps}
     >
       {Array.from(options.entries()).map(([key, text]) => (
-        <Option key={key} value={key}>{text}</Option>
+        <Option key={key} value={key} text={text}>{renderOption ? renderOption(key, text) : text}</Option>
       ))}
     </Dropdown>
   );
