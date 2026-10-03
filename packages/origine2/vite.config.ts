@@ -37,6 +37,10 @@ export default defineConfig({
   },
   server: {
     port: WEBGAL_PORT,
+    watch: {
+      // Build output can be rewritten or locked while bundling.
+      ignored: ['**/dist/**'],
+    },
     proxy: {
       // 接口地址代理
       '/api': {
