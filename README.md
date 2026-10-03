@@ -4,6 +4,36 @@
 
 仅对原 WebGAL_MYGO_Terre 编辑器做适配 3D 立绘的最小化修改，3D 模型复用 Live2D 编辑界面和参数。
 
+## 必看：如何让 3D 立绘加载 BanG Dream Live2D 表情和动作
+
+默认情况下，3D 立绘不会加载 BanG Dream Live2D 表情和动作，原因是 Live2D 表情和动作和模型绑定，figure 目录中可能有多套重复的表情和动作。为了避免冲突，需要手动指定目录加载供 3D 立绘使用的 Live2D 表情和动作。
+
+1、首先在 `figure` 目录下创建一个新目录，名称任意，例如 `bangdream_live2d` ，后续 3D 立绘会从此目录读取表情和动作。
+
+2、找到已有的 BanG Dream Live2D 表情和动作，一般位于 `figure/任意mygo_mujica角色/.mtn_exp/expressions/__base__/` 和 `figure/任意mygo_mujica角色/.mtn_exp/motions/PARAM_IMPORT__数字/` 这两个路径，将其中的全部角色名文件夹复制到上一步新建的目录。
+
+若没有.mtn_exp目录，请在文件夹选项中打开“显示隐藏的文件、文件夹和驱动器”。
+
+复制好后目录结构应该如下所示：
+```
+bangdream_live2d
+|- anon
+    |- angry01.mtn
+    |- angry01.exp.json
+    |- ...
+|- mana
+|- ...
+```
+
+3、在第一步创建的目录中新建 `config.json` 文件，原样复制并保存以下内容：
+```json
+{"components":[]}
+```
+
+4、使用 WebGAL LoveLive Terre 打开一次工程，会自动搜索该目录中的表情和动作，并在 3D 立绘的对应下拉框中显示。
+
+后续增加表情或动作只需复制到此目录，删除表情或动作只需直接删除，界面中的列表会自动刷新。
+
 ## 生成式人工智能使用声明
 
 本项目中大部分新增代码均由生成式人工智能（Generative AI）工具协助编写。核心路线和方案由作者与 AI 共同讨论确定。
