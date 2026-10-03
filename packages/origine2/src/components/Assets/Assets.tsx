@@ -58,6 +58,7 @@ import Upload from './Upload';
 import naturalCompare from 'natural-compare-lite';
 import useEditorStore from '@/store/useEditorStore';
 import useTrashFailedToast from '@/hooks/useTrashFailedToast';
+import useModelAssets from '@/hooks/useModelAssets';
 
 export interface IFile {
   extName: string;
@@ -140,7 +141,8 @@ export default function Assets({
   const toastTrashFailed = useTrashFailedToast();
 
   const currentPath = useValue([...basePath, ...selectedFilePath.slice(0, -1)]);
-  const currentFullPath = useMemo(() => [...rootPath, ...currentPath.value], [currentPath.value]);
+  const currentFullPath = useMemo(() => [...rootPath, ...currentPath.value], [rootPath.join('/'), currentPath.value]);
+  const { models, loadPreview, refreshModels } = useModelAssets(rootPath, currentFullPath);
   const lastPath = useValue<string[]>([...basePath, ...selectedFilePath]);
   const isBasePath = currentPath.value.join('/') === basePath.join('/');
   const extNameTypes = fileConfig
@@ -261,6 +263,7 @@ export default function Assets({
   }, [lastPath.value, sortedFiles]);
 
   const handleRefresh = () => {
+    void refreshModels();
     const swrKey = currentFullPath.join('/');
     if (isInAnimationDirectory()) {
       updateAnimationTable().finally(() => mutate(swrKey));
@@ -686,7 +689,9 @@ export default function Assets({
                           file={sortedFiles[fileIndex]}
                           type={viewType}
                           selected={sortedFiles[fileIndex].path === [...basePath, ...selectedFilePath].join('/')}
-                          desc={fileConfig?.get(sortedFiles[fileIndex].path)?.desc ?? undefined}
+                          desc={models.get(sortedFiles[fileIndex].path)?.description ?? fileConfig?.get(sortedFiles[fileIndex].path)?.desc}
+                          model={models.get(sortedFiles[fileIndex].path)}
+                          loadModelPreview={loadPreview}
                           isProtected={fileConfig?.get(sortedFiles[fileIndex].path)?.isProtected ?? isProtected}
                           handleOpenFile={handleOpenFile}
                           handleBackupFile={handleBackupFile}

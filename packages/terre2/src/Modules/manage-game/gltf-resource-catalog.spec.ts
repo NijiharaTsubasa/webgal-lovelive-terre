@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { generateGltfResourceCatalog } from './gltf-resource-catalog';
+import { CatalogInventory, generateGltfResourceCatalog } from './gltf-resource-catalog';
 
 describe('glTF resource catalog', () => {
   let root: string;
@@ -18,6 +18,44 @@ describe('glTF resource catalog', () => {
   afterEach(async () => {
     jest.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it('keeps model descriptions in the catalog and excludes preview from all inventory caches', async () => {
+    await put('game/figure/模型 空格/config.json', { components: [
+      { type: 'model', role: 'integrated', name: 'model', description: '角色说明', preview: 'data:image/webp;base64,QUJD' },
+    ] });
+    const inventory: CatalogInventory = { files: new Set([
+      join(root, 'webgal-engine.json'), join(root, 'index.html'), join(root, 'game/figure/模型 空格/config.json'),
+    ]) };
+    const result = await generateGltfResourceCatalog(root, false, undefined, inventory);
+    expect(result.resources[0]).toMatchObject({ description: '角色说明' });
+    expect(JSON.stringify(result)).not.toContain('preview');
+    for (const cache of [inventory.cache.configs, inventory.cache.models]) {
+      expect(JSON.stringify([...cache.values()])).not.toContain('data:image/webp');
+    }
+    const catalog = await fs.readFile(join(root, 'game/gltf-resources.json'), 'utf8');
+    expect(catalog).toContain('角色说明');
+    expect(catalog).not.toContain('preview');
+  });
+
+  it('preserves model preview in mixed parameter config while omitting it from caches', async () => {
+    const file = 'game/figure/mixed/config.json';
+    const preview = 'data:image/webp;base64,QUJD';
+    await put(file, { components: [
+      { type: 'model', role: 'integrated', name: 'mixed', description: '模型', preview },
+      { type: 'garupa-motion', name: 'idle', src: 'idle.mtn' },
+    ] });
+    await put('game/figure/mixed/idle.mtn', {});
+    await put('game/figure/mixed/new.mtn', {});
+    const inventory: CatalogInventory = { files: new Set([
+      join(root, 'webgal-engine.json'), join(root, 'index.html'), join(root, file),
+      join(root, 'game/figure/mixed/idle.mtn'), join(root, 'game/figure/mixed/new.mtn'),
+    ]) };
+    await generateGltfResourceCatalog(root, false, undefined, inventory);
+    expect(JSON.parse(await fs.readFile(join(root, file), 'utf8')).components[0].preview).toBe(preview);
+    for (const cache of [inventory.cache.configs, inventory.cache.models, inventory.cache.parameterPackages]) {
+      expect(JSON.stringify([...cache.values()])).not.toContain(preview);
+    }
   });
 
   it('indexes native motion descriptions and refreshes description-only edits', async () => {

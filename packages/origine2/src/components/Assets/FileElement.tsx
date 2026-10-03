@@ -20,7 +20,8 @@ import {
   SaveCopyRegular,
 } from '@fluentui/react-icons';
 import { t } from '@lingui/macro';
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ModelAssetInfo, scheduleModelPreview } from '@/utils/modelAssets';
 import { useValue } from '../../hooks/useValue';
 import IconWrapper from '../iconWrapper/IconWrapper';
 import { IFile, IViewType } from './Assets';
@@ -36,6 +37,8 @@ export default function FileElement({
   type,
   selected,
   desc,
+  model,
+  loadModelPreview,
   isProtected,
   handleOpenFile,
   handleBackupFile,
@@ -48,6 +51,8 @@ export default function FileElement({
   type: IViewType;
   selected?: boolean;
   desc?: string;
+  model?: ModelAssetInfo;
+  loadModelPreview?: (model: ModelAssetInfo) => Promise<string | undefined>;
   isProtected?: boolean;
   handleOpenFile: (file: IFile) => Promise<void>;
   handleBackupFile: (source: string) => Promise<void>;
@@ -58,6 +63,12 @@ export default function FileElement({
   const newFileName = useValue(file.name);
   const FileItemSelfRef = useRef(null);
   const showTooltip = useValue(false);
+  const [preview, setPreview] = useState<{ model: ModelAssetInfo; load: typeof loadModelPreview; src?: string }>();
+  useEffect(() => {
+    if ((type !== 'grid' && !showTooltip.value) || !model || !loadModelPreview) return;
+    return scheduleModelPreview(() => loadModelPreview(model), src => setPreview({ model, load: loadModelPreview, src }));
+  }, [type, showTooltip.value, model, loadModelPreview]);
+  const modelPreview = preview?.model === model && preview?.load === loadModelPreview ? preview?.src : undefined;
 
   const filePath = [...rootPath, file.path].join('/');
 
@@ -80,6 +91,13 @@ export default function FileElement({
                 src={filePath}
                 style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
               />
+            </div>
+          )}
+          {model && (
+            <div style={{ maxWidth: '320px', whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+              {modelPreview && <img className={styles.mosaicBg} src={modelPreview} style={{ width: '100%', maxHeight: '240px', objectFit: 'contain' }} />}
+              <div>{model.name}</div>
+              {model.description && <div style={{ color: 'var(--text-weak)', fontSize: '12px', whiteSpace: 'pre-wrap' }}>{model.description}</div>}
             </div>
           )}
           {file.path}
@@ -126,7 +144,9 @@ export default function FileElement({
             aspectRatio: '4/3',
           }}
         >
-          {!file.isDir &&
+          {type === 'grid' && modelPreview ? (
+            <img src={modelPreview} draggable="false" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : !file.isDir &&
             (is_picture(file.extName) && type === 'grid' ? (
               <img src={filePath} draggable="false" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             ) : (
@@ -136,7 +156,7 @@ export default function FileElement({
                 iconSize={type === 'grid' ? 40 : 20}
               />
             ))}
-          {file.isDir && (
+          {file.isDir && !(type === 'grid' && modelPreview) && (
             <IconWrapper
               src={getDirIcon(file.path)}
               size={type === 'grid' ? 44 : 22}
@@ -167,7 +187,7 @@ export default function FileElement({
             {file.name}
           </span>
           {desc && (
-            <span style={{ color: 'var(--text-weak)', fontSize: '12px', fontStyle: 'italic', paddingRight: '2px' }}>
+            <span style={{ color: 'var(--text-weak)', fontSize: '12px', paddingRight: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%', flexShrink: 1 }}>
               {desc}
             </span>
           )}

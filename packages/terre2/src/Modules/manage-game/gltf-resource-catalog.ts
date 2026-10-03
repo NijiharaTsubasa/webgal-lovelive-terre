@@ -135,7 +135,14 @@ async function readMetadata<T>(
 
 function discoveryFields(manifest: any) {
   if (!Array.isArray(manifest?.components)) return {};
-  if (parameterDirectory(manifest)) return manifest;
+  if (parameterDirectory(manifest)) return {
+    ...manifest,
+    components: manifest.components.map(component => {
+      if (component?.type !== 'model') return component;
+      const { preview, ...metadata } = component;
+      return metadata;
+    }),
+  };
   return {
     components: manifest.components.map((component) => {
       if (!component || typeof component !== 'object') return null;
@@ -156,7 +163,7 @@ function discoveryFields(manifest: any) {
         result.behaviors = component.behaviors
           .filter((behavior) => typeof behavior?.name === 'string')
           .map(({ name }) => ({ name }));
-      if (component.type === 'motion' && typeof component.description === 'string')
+      if (['motion', 'model'].includes(component.type) && typeof component.description === 'string')
         result.description = component.description;
       return result;
     }),
@@ -516,7 +523,7 @@ async function scan(
         throw new Error(`Duplicate glTF resource ${identity}`);
       identities.add(identity);
       const entry: GltfCatalogEntry = { type: component.type, name, config };
-      if (component.type === 'motion' && typeof component.description === 'string' && component.description.trim())
+      if (['motion', 'model'].includes(component.type) && typeof component.description === 'string' && component.description.trim())
         entry.description = component.description;
       resources.push(entry);
       definitions.push({ entry, component, path });
@@ -622,8 +629,10 @@ async function scan(
   for (const update of parameterUpdates) {
     if (inventory?.cancelled) throw new Error('glTF resource index was closed');
     let current;
+    let original;
     try {
-      current = discoveryFields(await jsonFile(update.path));
+      original = await jsonFile(update.path);
+      current = discoveryFields(original);
     } catch (error) {
       if (inventory) {
         invalidateCatalogFile(inventory, update.path);
@@ -638,7 +647,13 @@ async function scan(
       if (inventory) invalidateCatalogFile(inventory, update.path);
       throw new CatalogChangedError('Parameter config changed during indexing');
     }
-    await replaceFile(update.path, update.content);
+    const updated = JSON.parse(update.content);
+    for (const component of updated.components) {
+      if (component?.type !== 'model') continue;
+      const source = original.components.find(item => item?.type === 'model' && item.name === component.name && item.role === component.role);
+      if (source && Object.prototype.hasOwnProperty.call(source, 'preview')) component.preview = source.preview;
+    }
+    await replaceFile(update.path, `${JSON.stringify(updated, null, 2)}\n`);
     cache.configs.delete(update.path);
   }
   pruneMetadata(cache.configs, new Set(configPaths));
