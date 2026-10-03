@@ -47,6 +47,7 @@ describe('watched glTF catalog', () => {
     await put('game/figure/parameters/config.json', { components: [] });
     index = new GltfCatalogIndex(root, join(root, 'template'), (error) =>
       errors.push(error),
+      game,
     );
     await index.start();
   });
@@ -66,6 +67,25 @@ describe('watched glTF catalog', () => {
     expect(read).not.toHaveBeenCalled();
     expect(stat).not.toHaveBeenCalled();
     expect(dirs).not.toHaveBeenCalled();
+  });
+
+  it('only observes the requested project, including after another project is created', async () => {
+    await index.close();
+    const other = join(root, 'unopened');
+    const watch = jest.spyOn(nativeFs, 'watch');
+    await fs.mkdir(join(other, 'game/figure/models'), { recursive: true });
+    await fs.writeFile(join(other, 'index.html'), '');
+    await fs.writeFile(join(other, 'game/figure/models/config.json'), JSON.stringify({ components: [] }));
+    index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error), game);
+    await index.start();
+    const newer = join(root, 'copying/game/figure/models');
+    await fs.mkdir(newer, { recursive: true });
+    await fs.writeFile(join(newer, 'config.json'), '{}');
+    await index.notify(join(other, 'game/figure/models/config.json'));
+    await index.get(game);
+    expect(watch.mock.calls.some(([path]) => resolve(String(path)).startsWith(other))).toBe(false);
+    expect(watch.mock.calls.some(([path]) => resolve(String(path)).startsWith(join(root, 'copying')))).toBe(false);
+    await expect(fs.stat(join(other, 'game/gltf-resources.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   for (const startup of [false, true]) {
@@ -94,7 +114,7 @@ describe('watched glTF catalog', () => {
       await put('game/figure/copied/config.json', { components: [{ type: 'model', role: 'integrated', name: 'copied', model: 'model.glb' }] });
       await writeGlb('before');
       if (startup) {
-        index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error));
+        index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error), game);
         await index.start();
       }
       const deadline = Date.now() + 3000;
@@ -127,7 +147,7 @@ describe('watched glTF catalog', () => {
     watcher.emit('error', Object.assign(new Error('watch denied'), { code: 'EACCES', path: join(root, game, 'game/figure/parameters/config.json') }));
     await expect(index.get(game)).rejects.toThrow('watch denied');
     await index.close();
-    index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error));
+    index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error), game);
     await index.start();
     const path = join(root, game, 'game/figure/locked/config.json');
     const original = nativeFs.watch;

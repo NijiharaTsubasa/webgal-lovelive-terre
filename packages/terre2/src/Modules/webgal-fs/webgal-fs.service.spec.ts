@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import AdmZip = require('adm-zip');
 import { WebgalFsService } from './webgal-fs.service';
 import { UserDataService } from '../user-data/user-data.service';
+import { GltfCatalogIndex } from '../manage-game/gltf-catalog-index';
 
 // These filesystem tests never invoke the OS recycle bin.
 jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
@@ -46,6 +47,7 @@ describe('WebgalFsService', () => {
       .mockReturnValue(join(testRoot, 'template'));
     const config = join(resource, 'config.json');
     const catalog = join(game, 'game', 'gltf-resources.json');
+    await service.getGltfCatalog('demo');
     await service.updateTextFile(
       config,
       JSON.stringify({
@@ -69,6 +71,15 @@ describe('WebgalFsService', () => {
     expect(JSON.parse(await fs.readFile(catalog, 'utf8')).resources).toEqual(
       [],
     );
+  });
+
+  it('does not start discovery when copying resources into an unopened project', async () => {
+    const games = join(testRoot, 'games');
+    jest.spyOn(UserDataService, 'getGameRoot').mockReturnValue(games);
+    jest.spyOn(UserDataService, 'getEngineTemplateRoot').mockReturnValue(join(testRoot, 'template'));
+    const start = jest.spyOn(GltfCatalogIndex.prototype, 'start').mockResolvedValue();
+    await service.refreshGltfCatalogForPath(join(games, 'new-game/game/figure/model/config.json'));
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('allows regular Windows absolute paths in segment validation', () => {

@@ -44,27 +44,31 @@ interface FileList {
 export class WebgalFsService {
   constructor(private readonly logger: ConsoleLogger) {}
 
-  private catalogIndex?: GltfCatalogIndex;
+  private catalogIndexes = new Map<string, GltfCatalogIndex>();
   private catalogRoot?: string;
   private catalogOpening?: Promise<GltfCatalogIndex>;
 
-  private async getCatalogIndex() {
+  private async getCatalogIndex(gameName: string) {
     const root = UserDataService.getGameRoot();
     if (this.catalogOpening) {
       await this.catalogOpening;
-      return this.getCatalogIndex();
+      return this.getCatalogIndex(gameName);
     }
-    if (this.catalogRoot === root && this.catalogIndex)
-      return this.catalogIndex;
+    const existing = this.catalogIndexes.get(gameName);
+    if (this.catalogRoot === root && existing) return existing;
     const opening = (async () => {
-      await this.catalogIndex?.close();
+      if (this.catalogRoot !== root) {
+        await this.onModuleDestroy();
+      }
       this.catalogRoot = root;
-      this.catalogIndex = new GltfCatalogIndex(
+      const index = new GltfCatalogIndex(
         root,
         UserDataService.getEngineTemplateRoot(),
         (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
+        gameName,
       );
-      return this.catalogIndex;
+      this.catalogIndexes.set(gameName, index);
+      return index;
     })();
     this.catalogOpening = opening;
     try {
@@ -74,25 +78,18 @@ export class WebgalFsService {
     }
   }
 
-  async onApplicationBootstrap() {
-    try {
-      await (await this.getCatalogIndex()).start();
-    } catch (error) {
-      this.logger.warn(`glTF 资源索引初始化失败: ${String(error)}`);
-    }
-  }
-
   async onModuleDestroy() {
-    await this.catalogIndex?.close();
+    await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
+    this.catalogIndexes.clear();
   }
 
   async getGltfCatalog(gameName: string) {
-    return (await this.getCatalogIndex()).get(gameName);
+    return (await this.getCatalogIndex(gameName)).get(gameName);
   }
 
   async rebuildGltfCatalog(gameName: string) {
-    await this.catalogIndex?.close();
-    this.catalogRoot = undefined;
+    await this.catalogIndexes.get(gameName)?.close();
+    this.catalogIndexes.delete(gameName);
     return this.getGltfCatalog(gameName);
   }
 
@@ -114,7 +111,9 @@ export class WebgalFsService {
         )
       )
         return;
-      const index = await this.getCatalogIndex();
+      if (this.catalogRoot !== UserDataService.getGameRoot()) return;
+      const index = this.catalogIndexes.get(gameName);
+      if (!index) return;
       if (changed) await index.notify(normalized);
       else await index.get(gameName);
     } catch (error) {

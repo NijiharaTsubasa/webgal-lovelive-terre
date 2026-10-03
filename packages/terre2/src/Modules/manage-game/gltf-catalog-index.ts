@@ -50,13 +50,14 @@ export class GltfCatalogIndex {
     private readonly root: string,
     private readonly engineRoot: string,
     private readonly report: (error: Error) => void = () => {},
+    private readonly gameName: string,
   ) {}
 
   private locate(path: string) {
     const rel = relative(this.root, resolve(path));
     if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return;
     const [game, ...parts] = rel.split(sep);
-    if (!game) return;
+    if (!game || game !== this.gameName) return;
     return { game, inner: parts.join('/') };
   }
 
@@ -100,7 +101,7 @@ export class GltfCatalogIndex {
     if (this.closed) throw new Error('glTF resource index is closed');
     if (this.starting) return this.starting;
     this.starting = new Promise<void>((done, reject) => {
-      this.watcher = watch(this.root, {
+      this.watcher = watch(join(this.root, this.gameName), {
         followSymlinks: false,
         usePolling: false,
         atomic: true,
