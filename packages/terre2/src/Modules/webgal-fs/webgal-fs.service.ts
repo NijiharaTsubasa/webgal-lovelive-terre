@@ -15,7 +15,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UserDataService } from '../user-data/user-data.service';
 import trash from 'trash';
-import { GltfCatalogIndex } from '../manage-game/gltf-catalog-index';
+import { GltfCatalogBackground } from '../manage-game/gltf-catalog-background';
 
 const pExecFile = promisify(execFile);
 
@@ -44,11 +44,92 @@ interface FileList {
 export class WebgalFsService {
   constructor(private readonly logger: ConsoleLogger) {}
 
-  private catalogIndexes = new Map<string, GltfCatalogIndex>();
+  private catalogIndexes = new Map<string, GltfCatalogBackground>();
   private catalogRoot?: string;
-  private catalogOpening?: Promise<GltfCatalogIndex>;
+  private catalogOpening?: Promise<GltfCatalogBackground>;
+  private catalogSessions = new Map<string, Map<string, number>>();
+  private catalogPins = new Map<string, number>();
+  private catalogIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private catalogSuspensions = new Map<string, number>();
+  private catalogSessionTimer?: ReturnType<typeof setInterval>;
+  private catalogEpoch = 0;
+  private catalogEpochs = new Map<string, { index: GltfCatalogBackground; revision: number; value: number }>();
+  private catalogSnapshots = new Map<string, any>();
+
+  async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
+    const root = UserDataService.getGameRoot();
+    if (this.catalogRoot !== undefined && this.catalogRoot !== root) await this.onModuleDestroy();
+    this.catalogRoot = root;
+    let sessions = this.catalogSessions.get(gameName);
+    if (!sessions) {
+      sessions = new Map();
+      this.catalogSessions.set(gameName, sessions);
+    }
+    if (active) {
+      sessions.set(sessionId, Date.now() + 30000);
+      const timer = this.catalogIdleTimers.get(gameName);
+      if (timer) clearTimeout(timer);
+      this.catalogIdleTimers.delete(gameName);
+      if (!this.catalogSessionTimer) {
+        this.catalogSessionTimer = setInterval(() => this.expireCatalogSessions(), 5000);
+        this.catalogSessionTimer.unref();
+      }
+      await this.getCatalogIndex(gameName);
+    } else {
+      sessions.delete(sessionId);
+      this.releaseUnusedCatalog(gameName);
+    }
+    return { ok: true };
+  }
+
+  private expireCatalogSessions() {
+    for (const [gameName, sessions] of this.catalogSessions) {
+      for (const [id, expiry] of sessions) if (expiry <= Date.now()) sessions.delete(id);
+      this.releaseUnusedCatalog(gameName);
+    }
+  }
+
+  private releaseUnusedCatalog(gameName: string) {
+    if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName) || this.catalogIdleTimers.has(gameName)) return;
+    const timer = setTimeout(() => {
+      this.catalogIdleTimers.delete(gameName);
+      if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName)) return;
+      const index = this.catalogIndexes.get(gameName);
+      this.catalogIndexes.delete(gameName);
+      this.catalogSessions.delete(gameName);
+      if (index) {
+        this.catalogSnapshots.set(gameName, this.catalogSnapshot(gameName, index));
+        void index.close().catch(error => this.logger.warn(`glTF 索引关闭失败: ${error.message}`));
+      }
+      if (!this.catalogSessions.size && this.catalogSessionTimer) {
+        clearInterval(this.catalogSessionTimer);
+        this.catalogSessionTimer = undefined;
+      }
+    }, 10000);
+    timer.unref();
+    this.catalogIdleTimers.set(gameName, timer);
+  }
+
+  private catalogSnapshot(gameName: string, index?: GltfCatalogBackground) {
+    if (!index) return { ...(this.catalogSnapshots.get(gameName) ?? { enabled: false, resources: [], issues: [], revision: 0 }), indexing: Boolean(this.catalogSuspensions.get(gameName)) };
+    const snapshot = index.snapshot();
+    const previous = this.catalogSnapshots.get(gameName);
+    let revision = this.catalogEpochs.get(gameName);
+    if (!revision || revision.index !== index || revision.revision !== snapshot.revision) {
+      revision = { index, revision: snapshot.revision, value: ++this.catalogEpoch };
+      this.catalogEpochs.set(gameName, revision);
+    }
+    const result = {
+      ...snapshot,
+      ...(snapshot.indexing && !snapshot.resources.length && previous ? { enabled: previous.enabled, resources: previous.resources, issues: previous.issues } : {}),
+      revision: revision.value,
+    };
+    this.catalogSnapshots.set(gameName, result);
+    return result;
+  }
 
   private async getCatalogIndex(gameName: string) {
+    if (this.catalogSuspensions.get(gameName)) return undefined;
     const root = UserDataService.getGameRoot();
     if (this.catalogOpening) {
       await this.catalogOpening;
@@ -57,17 +138,19 @@ export class WebgalFsService {
     const existing = this.catalogIndexes.get(gameName);
     if (this.catalogRoot === root && existing) return existing;
     const opening = (async () => {
-      if (this.catalogRoot !== root) {
+      if (this.catalogRoot !== undefined && this.catalogRoot !== root) {
         await this.onModuleDestroy();
       }
       this.catalogRoot = root;
-      const index = new GltfCatalogIndex(
+      const index = new GltfCatalogBackground(
         root,
         UserDataService.getEngineTemplateRoot(),
-        (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
         gameName,
+        (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
       );
       this.catalogIndexes.set(gameName, index);
+      index.start();
+      this.releaseUnusedCatalog(gameName);
       return index;
     })();
     this.catalogOpening = opening;
@@ -79,12 +162,37 @@ export class WebgalFsService {
   }
 
   async onModuleDestroy() {
+    if (this.catalogSessionTimer) clearInterval(this.catalogSessionTimer);
+    this.catalogSessionTimer = undefined;
+    for (const timer of this.catalogIdleTimers.values()) clearTimeout(timer);
+    this.catalogIdleTimers.clear();
     await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
     this.catalogIndexes.clear();
+    this.catalogSessions.clear();
+    this.catalogPins.clear();
+    this.catalogSnapshots.clear();
+    this.catalogEpochs.clear();
   }
 
   async getGltfCatalog(gameName: string) {
-    return (await this.getCatalogIndex(gameName)).get(gameName);
+    return this.catalogSnapshot(gameName, await this.getCatalogIndex(gameName));
+  }
+
+  async ensureGltfCatalog(gameName: string) {
+    this.catalogPins.set(gameName, (this.catalogPins.get(gameName) ?? 0) + 1);
+    const timer = this.catalogIdleTimers.get(gameName);
+    if (timer) clearTimeout(timer);
+    this.catalogIdleTimers.delete(gameName);
+    try {
+      const index = await this.getCatalogIndex(gameName);
+      if (!index) throw new Error('正在复制工程资源，请稍后重试导出');
+      return await index.settled();
+    } finally {
+      const count = (this.catalogPins.get(gameName) ?? 1) - 1;
+      if (count) this.catalogPins.set(gameName, count);
+      else this.catalogPins.delete(gameName);
+      this.releaseUnusedCatalog(gameName);
+    }
   }
 
   async rebuildGltfCatalog(gameName: string) {
@@ -114,10 +222,38 @@ export class WebgalFsService {
       if (this.catalogRoot !== UserDataService.getGameRoot()) return;
       const index = this.catalogIndexes.get(gameName);
       if (!index) return;
-      if (changed) await index.notify(normalized);
-      else await index.get(gameName);
+      if (changed) index.notify(normalized);
     } catch (error) {
       this.logger.warn(`glTF 资源清单未更新: ${String(error)}`);
+    }
+  }
+
+  private async withCatalogCopy<T>(target: string, operation: () => Promise<T>): Promise<T> {
+    const path = this.normalizeFsPath(target);
+    const root = UserDataService.getGameRoot();
+    const rel = relative(root, path);
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return operation();
+    const names = rel ? [rel.split(sep)[0]] : [...new Set([...this.catalogIndexes.keys(), ...this.catalogSessions.keys()])];
+    for (const name of names) this.catalogSuspensions.set(name, (this.catalogSuspensions.get(name) ?? 0) + 1);
+    try {
+      await Promise.all(names.map(async name => {
+        const index = this.catalogIndexes.get(name);
+        if (index) {
+          this.catalogSnapshots.set(name, this.catalogSnapshot(name, index));
+          this.catalogIndexes.delete(name);
+          await index.close();
+        }
+      }));
+      return await operation();
+    } finally {
+      for (const name of names) {
+        const count = (this.catalogSuspensions.get(name) ?? 1) - 1;
+        if (count) this.catalogSuspensions.set(name, count);
+        else {
+          this.catalogSuspensions.delete(name);
+          if (this.catalogSessions.get(name)?.size) await this.getCatalogIndex(name);
+        }
+      }
     }
   }
 
@@ -198,8 +334,7 @@ export class WebgalFsService {
   async copy(src: string, dest: string): Promise<boolean> {
     try {
       this.logger.log(`复制: ${decodeURI(src)} -> ${decodeURI(dest)}`);
-      await fs.cp(decodeURI(src), decodeURI(dest), { recursive: true });
-      await this.refreshGltfCatalogForPath(dest);
+      await this.withCatalogCopy(dest, () => fs.cp(decodeURI(src), decodeURI(dest), { recursive: true }));
       return true;
     } catch (error) {
       this.logger.error(
@@ -690,17 +825,16 @@ export class WebgalFsService {
 
       await fs.mkdir(decodedTargetDir, { recursive: true });
 
-      return await new Promise<boolean>((resolve) => {
-        zip.extractAllToAsync(decodedTargetDir, true, true, async (err) => {
+      return await this.withCatalogCopy(decodedTargetDir, () => new Promise<boolean>((resolve) => {
+        zip.extractAllToAsync(decodedTargetDir, true, true, (err) => {
           if (err) {
             this.logger.error(`解压缩失败: ${String(err)}`);
             resolve(false);
           } else {
-            await this.refreshGltfCatalogForPath(decodedTargetDir);
             resolve(true);
           }
         });
-      });
+      }));
     } catch (error) {
       this.logger.error(`解压缩失败: ${String(error)}`);
       return false;

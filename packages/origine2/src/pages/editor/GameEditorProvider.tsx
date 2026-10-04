@@ -5,6 +5,7 @@ import { GameEditorContext, createGameEditorStore } from "@/store/useGameEditorS
 import { Spinner } from "@fluentui/react-components";
 import { ReactNode, useRef } from "react";
 import useSWR from "swr";
+import { useGltfCatalogSession } from '@/hooks/useGltfCatalog';
 
 const GameEditorProvider = ({ children }: { children: ReactNode }) => {
   const page = useEditorStore.use.page();
@@ -30,13 +31,14 @@ const GameEditorProvider = ({ children }: { children: ReactNode }) => {
           <Spinner labelPosition="below" label={gameDir} />
         </div>
       }
-      {inGameList && !fristLoading && <GameEditorContextProvider>{children}</GameEditorContextProvider>}
+      {inGameList && !fristLoading && <GameEditorContextProvider key={gameDir}>{children}</GameEditorContextProvider>}
     </>
   );
 };
 
 const GameEditorContextProvider = ({ children }: { children: ReactNode }) => {
   const gameDir = useEditorStore.use.subPage();
+  useGltfCatalogSession(gameDir);
   const gameEditorStore = useRef(createGameEditorStore(gameDir)).current;
   return (
     <GameEditorContext.Provider value={gameEditorStore}>

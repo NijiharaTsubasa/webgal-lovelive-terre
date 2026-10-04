@@ -8,26 +8,28 @@ import TemplateEditor from '@/pages/templateEditor/TemplateEditor';
 
 export type IPage = 'dashboard' | 'game' | 'template';
 
+// Route components also import navigation helpers from this module. Defer JSX
+// creation until rendering, after the circular imports have initialized.
 export const routes: { [key in IPage]: { url: string; element: ReactElement } } = {
   dashboard: {
     url: '#/dashboard',
-    element: <DashBoard />,
+    get element() { return <DashBoard />; },
   },
   game: {
     url: '#/game',
-    element: (
+    get element() { return (
       <GameEditorProvider>
         <Editor />
       </GameEditorProvider>
-    ),
+    ); },
   },
   template: {
     url: '#/template',
-    element: (
+    get element() { return (
       <TemplateEditorProvider>
         <TemplateEditor />
       </TemplateEditorProvider>
-    ),
+    ); },
   },
 };
 

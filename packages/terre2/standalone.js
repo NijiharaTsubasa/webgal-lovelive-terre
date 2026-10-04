@@ -7,12 +7,16 @@ const args = process.argv.slice(2);
 const isIntlEnabled = args.includes('--intl');
 
 module.exports = {
-  entry: './src/main',
+  entry: {
+    main: './src/main',
+    'gltf-catalog-worker': './src/Modules/manage-game/gltf-catalog-worker',
+  },
   target: 'node',
   // 置为空即可忽略webpack-node-externals插件
   externals: {},
   // ts文件的处理
   module: {
+    parser: { javascript: { dynamicImportMode: 'eager' } },
     rules: [
       {
         test: /\.ts?$/,
@@ -39,14 +43,13 @@ module.exports = {
   },
   // 打包后的文件名称以及位置
   output: {
-    filename: 'main.js',
+    filename: '[name].js',
     path: path.resolve(__dirname, 'dist'),
   },
   resolve: {
     extensions: ['.js', '.ts', '.json'],
   },
   plugins: [
-    new webpack.optimize.LimitChunkCountPlugin({ maxChunks: 1 }),
     // 需要进行忽略的插件
     new webpack.IgnorePlugin({
       checkResource(resource) {

@@ -10,6 +10,8 @@ export interface GltfCatalogResult {
   resources: GltfResourceEntry[];
   revision: number;
   issues?: unknown[];
+  indexing?: boolean;
+  error?: string;
 }
 
 export const LOVELIVE_ENGINE_ID = 'webgal-lovelive.lovelive';

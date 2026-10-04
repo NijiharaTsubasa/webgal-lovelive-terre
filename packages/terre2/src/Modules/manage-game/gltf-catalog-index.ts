@@ -45,13 +45,31 @@ export class GltfCatalogIndex {
   private closed = false;
   private watchError?: Error;
   private recoveries = new Map<string, WatchRecovery>();
+  private startupProgress?: ReturnType<typeof setInterval>;
+  private publishedState?: string;
 
   constructor(
     private readonly root: string,
     private readonly engineRoot: string,
     private readonly report: (error: Error) => void = () => {},
     private readonly gameName: string,
+    private readonly reportProgress: (message: string) => void = () => {},
+    private readonly onSnapshot: (snapshot: any) => void = () => {},
   ) {}
+
+  private publish(state: GameIndex, indexing: boolean) {
+    const signature = `${state.revision}:${indexing}:${state.error?.message ?? ''}`;
+    if (this.publishedState === signature) return;
+    this.publishedState = signature;
+    this.onSnapshot({
+      enabled: state.result?.enabled ?? true,
+      resources: state.result?.resources ?? [],
+      issues: state.result?.issues ?? [],
+      revision: state.revision,
+      indexing,
+      ...(state.error ? { error: state.error.message } : {}),
+    });
+  }
 
   private locate(path: string) {
     const rel = relative(this.root, resolve(path));
@@ -100,6 +118,19 @@ export class GltfCatalogIndex {
   start() {
     if (this.closed) throw new Error('glTF resource index is closed');
     if (this.starting) return this.starting;
+    const began = Date.now();
+    const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)}s`;
+    const fileCount = () => this.games.get(this.gameName)?.inventory.files.size ?? 0;
+    this.reportProgress(`glTF 索引开始: ${this.gameName}`);
+    let lastProgress = began;
+    this.startupProgress = setInterval(() => {
+      const now = Date.now();
+      const delay = now - lastProgress - 10000;
+      lastProgress = now;
+      this.reportProgress(
+        `glTF 索引处理中: ${this.gameName}, ${this.ready ? '解析资源元数据' : '发现文件并注册监听'}, ${fileCount()} 个相关文件, 已用时 ${elapsed()}${delay > 1000 ? `, Node 事件循环额外延迟 ${(delay / 1000).toFixed(1)}s` : ''}`,
+      );
+    }, 10000);
     this.starting = new Promise<void>((done, reject) => {
       this.watcher = watch(join(this.root, this.gameName), {
         followSymlinks: false,
@@ -157,6 +188,7 @@ export class GltfCatalogIndex {
       });
       this.watcher.once('ready', () => {
         this.ready = true;
+        this.reportProgress(`glTF 文件发现完成: ${this.gameName}, ${fileCount()} 个相关文件, ${elapsed()}`);
         // Serial game initialization bounds open files across many projects.
         void (async () => {
           for (const [game, state] of this.games) {
@@ -166,9 +198,18 @@ export class GltfCatalogIndex {
               this.report(error);
             }
           }
-        })().then(done, reject);
+        })().then(() => {
+          const state = this.games.get(this.gameName);
+          this.reportProgress(`glTF 索引完成: ${this.gameName}, ${state?.result?.resources.length ?? 0} 个资源, ${elapsed()}`);
+          done();
+        }, reject);
       });
     });
+    const stopProgress = () => {
+      if (this.startupProgress) clearInterval(this.startupProgress);
+      this.startupProgress = undefined;
+    };
+    this.starting.then(stopProgress, stopProgress);
     return this.starting;
   }
 
@@ -314,7 +355,10 @@ export class GltfCatalogIndex {
       invalidateCatalogFile(state.inventory, path);
     }
     state.dirty = true;
-    if (this.ready) this.schedule(game, state);
+    if (this.ready) {
+      this.publish(state, true);
+      this.schedule(game, state);
+    }
   }
 
   private schedule(game: string, state: GameIndex) {
@@ -322,7 +366,7 @@ export class GltfCatalogIndex {
     state.timer = setTimeout(() => {
       state.timer = undefined;
       void this.flush(game, state).catch(this.report);
-    }, 120);
+    }, 500);
   }
 
   private async flush(game: string, state: GameIndex) {
@@ -353,6 +397,7 @@ export class GltfCatalogIndex {
           state.result = result;
           state.revision++;
           state.error = undefined;
+          this.publish(state, state.dirty);
         } catch (error) {
           if (error instanceof CatalogChangedError) {
             state.dirty = true;
@@ -360,6 +405,7 @@ export class GltfCatalogIndex {
             continue;
           }
           state.error = error;
+          this.publish(state, false);
           throw error;
         }
       }
@@ -389,7 +435,7 @@ export class GltfCatalogIndex {
   }
 
   /** Writes made through Terre are known immediately, without waiting for OS events. */
-  async notify(path: string) {
+  async notify(path: string, flush = true) {
     await this.start();
     const location = this.locate(path);
     if (!location) return;
@@ -407,7 +453,7 @@ export class GltfCatalogIndex {
       if (error.code !== 'ENOENT') throw error;
       this.record('unlink', path);
       this.record('unlinkDir', path);
-      return this.get(location.game);
+      return flush ? this.get(location.game) : undefined;
     }
     if (stat.isSymbolicLink()) return;
     if (stat.isDirectory()) {
@@ -422,11 +468,13 @@ export class GltfCatalogIndex {
       };
       await walk(path);
     } else this.record('change', path, stat);
-    return this.get(location.game);
+    return flush ? this.get(location.game) : undefined;
   }
 
   async close() {
     this.closed = true;
+    if (this.startupProgress) clearInterval(this.startupProgress);
+    this.startupProgress = undefined;
     for (const recovery of this.recoveries.values()) {
       if (recovery.timer) clearTimeout(recovery.timer);
     }

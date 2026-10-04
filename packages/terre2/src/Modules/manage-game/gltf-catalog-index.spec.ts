@@ -69,6 +69,21 @@ describe('watched glTF catalog', () => {
     expect(dirs).not.toHaveBeenCalled();
   });
 
+  it('reports initialization phases once for concurrent readers', async () => {
+    await index.close();
+    const messages: string[] = [];
+    index = new GltfCatalogIndex(root, join(root, 'template'), error => errors.push(error), game, message => messages.push(message));
+    await Promise.all(Array.from({ length: 20 }, () => index.get(game)));
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toContain('glTF 索引开始: demo');
+    expect(messages[1]).toContain('glTF 文件发现完成: demo');
+    expect(messages[2]).toContain('glTF 索引完成: demo');
+    await index.get(game);
+    expect(messages).toHaveLength(3);
+    await index.close();
+    expect((index as any).startupProgress).toBeUndefined();
+  });
+
   it('only observes the requested project, including after another project is created', async () => {
     await index.close();
     const other = join(root, 'unopened');

@@ -23,7 +23,7 @@ export class ManageGameService {
     private readonly webgalFs: WebgalFsService,
   ) {}
 
-  async updateGltfResourceCatalog(gameName: string, rebuild = false) {
+  async updateGltfResourceCatalog(gameName: string, rebuild = false, revision?: number) {
     if (
       typeof gameName !== 'string' ||
       !WebgalFsService.checkFileName(gameName) ||
@@ -33,9 +33,22 @@ export class ManageGameService {
     ) {
       throw new BadRequestException('Invalid game name');
     }
-    return rebuild
+    const result = await (rebuild
       ? this.webgalFs.rebuildGltfCatalog(gameName)
-      : this.webgalFs.getGltfCatalog(gameName);
+      : this.webgalFs.getGltfCatalog(gameName));
+    if (!rebuild && revision === result.revision) {
+      const { resources, issues, ...status } = result;
+      return { ...status, unchanged: true };
+    }
+    return result;
+  }
+
+  async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
+    if (typeof gameName !== 'string' || !gameName || !WebgalFsService.checkFileName(gameName) || gameName === '.' || gameName === '..' ||
+        typeof sessionId !== 'string' || !sessionId.length || sessionId.length > 128 || typeof active !== 'boolean') {
+      throw new BadRequestException('Invalid catalog session');
+    }
+    return this.webgalFs.gltfCatalogSession(gameName, sessionId, active);
   }
 
   /**
@@ -343,7 +356,7 @@ export class ManageGameService {
     ejectPlatform: 'web' | 'electron-windows' | 'android',
   ): Promise<boolean> {
     try {
-      await this.updateGltfResourceCatalog(gameName);
+      await this.webgalFs.ensureGltfCatalog(gameName);
       // 检查是否使用了衍生版本
       const gameRootDir = `/public/games/${gameName}/`;
       const checkIsEngineTemplateExist = async () => {

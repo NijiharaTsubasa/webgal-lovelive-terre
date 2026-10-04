@@ -45,7 +45,7 @@ const target =
   process.env.PKG_TARGET ?? `${nodeVersion}-${mappedPlatform}-${mappedArch}`;
 
 const pkgBin = process.platform === 'win32' ? 'pkg.cmd' : 'pkg';
-const pkgArgs = [entrypoint, '-o', 'WebGAL_Terre', '-t', target];
+const pkgArgs = [entrypoint, '--config', path.join(process.cwd(), 'pkg.config.json'), '-o', 'WebGAL_Terre', '-t', target];
 const extraArgs = process.argv.slice(2);
 
 const result = spawnSync(pkgBin, [...pkgArgs, ...extraArgs], {

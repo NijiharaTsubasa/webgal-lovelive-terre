@@ -298,8 +298,13 @@ export class ManageGameController {
   }
 
   @Post('updateGltfResourceCatalog')
-  async updateGltfResourceCatalog(@Body() data: { gameName: string }) {
-    return this.manageGame.updateGltfResourceCatalog(data.gameName);
+  async updateGltfResourceCatalog(@Body() data: { gameName: string; revision?: number }) {
+    return this.manageGame.updateGltfResourceCatalog(data.gameName, false, data.revision);
+  }
+
+  @Post('gltfCatalogSession')
+  async gltfCatalogSession(@Body() data: { gameName: string; sessionId: string; active: boolean }) {
+    return this.manageGame.gltfCatalogSession(data.gameName, data.sessionId, data.active);
   }
 
   @Post('rebuildGltfResourceCatalog')

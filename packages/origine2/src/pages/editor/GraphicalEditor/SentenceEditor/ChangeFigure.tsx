@@ -5,7 +5,7 @@ import ChooseFile from "../../ChooseFile/ChooseFile";
 import { useValue } from "../../../../hooks/useValue";
 import { getArgByKey } from "../utils/getArgByKey";
 import TerreToggle from "../../../../components/terreToggle/TerreToggle";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { TerrePanel } from "@/pages/editor/GraphicalEditor/components/TerrePanel";
 import { Button, Input } from "@fluentui/react-components";
@@ -21,8 +21,8 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
-import { canChooseFigureFile, catalogFigurePaths, gltfFigureOptions, gltfFigureSelectionError, GltfCatalogResult, isGltfConfigPath } from "@/utils/gltfFigure";
-import { eventBus } from "@/utils/eventBus";
+import { canChooseFigureFile, gltfFigureOptions, gltfFigureSelectionError, isGltfConfigPath } from "@/utils/gltfFigure";
+import useGltfCatalog from '@/hooks/useGltfCatalog';
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
 type AnimationFlag = "" | "on";
@@ -70,52 +70,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const [spineSkinsList, setSpineSkinsList] = useState<string[]>([]);
   const [isSpineJsonFormat, setIsSpineJsonFormat] = useState(false);
   const [isJsonlFormat, setIsJsonlFormat] = useState(false);
-  const [gltfCatalog, setGltfCatalog] = useState<GltfCatalogResult>({ enabled: false, resources: [], revision: 0 });
+  const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
-  const catalogRequest = useRef(0);
-  const catalogSignature = useRef<string | null>(null);
-  const catalogEnabled = useRef(false);
-  const catalogRefresh = useRef<{ gameDir: string; promise: Promise<void> } | null>(null);
-  const refreshGltfCatalog = useCallback(async (force = false) => {
-    if (!force && catalogRefresh.current?.gameDir === gameDir) {
-      return catalogRefresh.current.promise;
-    }
-    const request = ++catalogRequest.current;
-    const promise = (async () => {
-      try {
-        const response = await axios.post<GltfCatalogResult>('/api/manageGame/updateGltfResourceCatalog', { gameName: gameDir });
-        if (request === catalogRequest.current) {
-          const signature = `${response.data.revision}:${response.data.enabled}`;
-          if (catalogSignature.current === signature) return;
-          // The running preview caches its catalog. Refresh it only when
-          // indexed content has changed.
-          if (catalogSignature.current !== null && (response.data.enabled || catalogEnabled.current)) {
-            eventBus.emit('iframe:refresh-game', null);
-          }
-          catalogSignature.current = signature;
-          catalogEnabled.current = response.data.enabled;
-          setGltfCatalog(response.data);
-        }
-      } catch (error) {
-        console.warn('glTF resource catalog could not be refreshed:', error);
-      }
-    })();
-    catalogRefresh.current = { gameDir, promise };
-    try { await promise; }
-    finally { if (catalogRefresh.current?.promise === promise) catalogRefresh.current = null; }
-  }, [gameDir]);
-  useEffect(() => {
-    catalogSignature.current = null;
-    catalogEnabled.current = false;
-    setGltfCatalog({ enabled: false, resources: [], revision: 0 });
-    void refreshGltfCatalog();
-    return () => {
-      catalogRequest.current += 1;
-      catalogRefresh.current = null;
-    };
-  }, [refreshGltfCatalog]);
-  const gltfModelPaths = useMemo(() => catalogFigurePaths(gltfCatalog.resources), [gltfCatalog.resources]);
   const motionDescriptions = useMemo(() => new Map(gltfCatalog.resources
     .filter(entry => entry.type === 'motion' && typeof entry.description === 'string' && entry.description.trim())
     .map(entry => [entry.name, entry.description!])), [gltfCatalog.resources]);
@@ -276,7 +233,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
 
   // 载入 motions / expressions（支持 .jsonl / .json / spine / .wmdl）
   const loadedFigure = useRef<string | null>(null);
-  const selectedGltfCatalog = isGltfConfigPath(figureFile.value) ? gltfCatalog : null;
+  const selectedGltfCatalog = useMemo(() => isGltfConfigPath(figureFile.value) ? gltfCatalog : null,
+    [figureFile.value, gltfCatalog.revision, gltfCatalog.enabled]);
   useEffect(() => {
     const controller = new AbortController();
     const requestOptions = { signal: controller.signal };
@@ -300,7 +258,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
     if (!pathRaw || pathRaw === "none") return cleanup;
 
     if (isGltfConfigPath(pathRaw)) {
-      if (gltfCatalog.enabled && gltfModelPaths.has(pathRaw.split(/[?#]/)[0])) {
+      // A valid selected config can be classified while its background index is
+      // still being built, including a file copied after the picker opened.
+      if (gltfCatalog.enabled) {
         axios.get(`/games/${gameDir}/game/figure/${pathRaw}`, requestOptions).then(async response => {
           if (controller.signal.aborted) return;
           const adapterPaths = [...new Set(gltfCatalog.resources.filter(entry => entry.type === 'garupa-expression-adapter').map(entry => entry.config))];
@@ -751,7 +711,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
                 setFigureSelectionError("");
                 if (fileDesc && isGltfConfigPath(fileDesc.name)) {
                   // The open picker may have indexed files copied after the panel's last refresh.
-                  await refreshGltfCatalog(true);
+                  await refreshGltfCatalog();
                   if (request !== figureSelectionRequest.current) return;
                 }
                 if (gltfCatalog.enabled && fileDesc && /\.json$/i.test(fileDesc.name)) {
@@ -779,6 +739,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             />
           </div>
           {figureSelectionError && <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)' }}>{figureSelectionError}</div>}
+          {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">正在索引 glTF 资源，列表会自动更新。</div>}
+          {gltfCatalog.error && <div role="alert">{gltfCatalog.error}</div>}
         </CommonOptions>}
       <CommonOptions title={t`z-index`} key="z-index">
         <input value={zIndex.value}

@@ -1,0 +1,174 @@
+import { EventEmitter } from 'events';
+import { Worker } from 'worker_threads';
+import { GltfCatalogBackground } from './gltf-catalog-background';
+
+jest.mock('worker_threads', () => ({ Worker: jest.fn() }));
+
+describe('GltfCatalogBackground', () => {
+  let worker: EventEmitter & { postMessage: jest.Mock; terminate: jest.Mock };
+  beforeEach(() => {
+    jest.clearAllMocks();
+    worker = Object.assign(new EventEmitter(), {
+      postMessage: jest.fn(),
+      terminate: jest.fn().mockResolvedValue(0),
+    });
+    (Worker as unknown as jest.Mock).mockImplementation(() => worker);
+  });
+
+  it('returns an immediate snapshot and publishes asynchronous index changes', async () => {
+    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    expect(background.snapshot()).toMatchObject({
+      resources: [],
+      indexing: true,
+    });
+    expect(Worker).toHaveBeenCalledTimes(1);
+    worker.emit('message', {
+      snapshot: {
+        enabled: true,
+        resources: [
+          { type: 'motion', name: 'new', config: 'figure/config.json' },
+        ],
+        issues: [],
+        revision: 1,
+        indexing: false,
+      },
+    });
+    expect(background.snapshot().resources[0].name).toBe('new');
+    expect(Worker).toHaveBeenCalledTimes(1);
+    await background.close();
+  });
+
+  it('posts notifications before a settled request and waits only in settled()', async () => {
+    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    background.notify('games/test/game/figure/config.json');
+    const complete = background.settled();
+    expect(
+      worker.postMessage.mock.calls.map(([message]) => message.type),
+    ).toEqual(['notify', 'settled']);
+    const requestId = worker.postMessage.mock.calls[1][0].requestId;
+    worker.emit('message', {
+      requestId,
+      snapshot: {
+        enabled: true,
+        resources: [],
+        issues: [],
+        revision: 2,
+        indexing: false,
+      },
+    });
+    await expect(complete).resolves.toMatchObject({
+      revision: 2,
+      indexing: false,
+    });
+    await background.close();
+  });
+
+  it('cancels pending initialization requests when its project closes', async () => {
+    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const complete = background.settled();
+    const rejected = expect(complete).rejects.toThrow('closed');
+    await background.close();
+    await rejected;
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+    background.start();
+    expect(Worker).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps snapshots readable after a worker error and rejects export waits', async () => {
+    const report = jest.fn();
+    const background = new GltfCatalogBackground(
+      'games',
+      'engine',
+      'test',
+      report,
+    );
+    const complete = background.settled();
+    const rejected = expect(complete).rejects.toThrow('failed');
+    worker.emit('error', new Error('failed'));
+    await rejected;
+    expect(background.snapshot()).toMatchObject({
+      indexing: false,
+      error: 'failed',
+    });
+    await expect(background.settled()).rejects.toThrow('failed');
+    expect(report).toHaveBeenCalledTimes(1);
+    await background.close();
+  });
+
+  it('reports recoverable watch warnings without poisoning pending requests', async () => {
+    const report = jest.fn();
+    const background = new GltfCatalogBackground(
+      'games',
+      'engine',
+      'test',
+      report,
+    );
+    background.start();
+    worker.emit('message', { type: 'warning', error: 'temporarily locked' });
+    expect(background.snapshot().error).toBeUndefined();
+    expect(report).toHaveBeenCalledTimes(1);
+    await background.close();
+  });
+
+  it('rejects pending requests if message delivery fails', async () => {
+    const report = jest.fn();
+    const background = new GltfCatalogBackground(
+      'games',
+      'engine',
+      'test',
+      report,
+    );
+    background.start();
+    worker.postMessage.mockImplementation(() => {
+      throw new Error('delivery failed');
+    });
+    await expect(background.settled()).rejects.toThrow('delivery failed');
+    expect(background.snapshot()).toMatchObject({
+      indexing: false,
+      error: 'delivery failed',
+    });
+    await background.close();
+  });
+
+  it('does not repeatedly start a worker whose startup failed', async () => {
+    (Worker as unknown as jest.Mock).mockImplementation(() => {
+      throw new Error('startup failed');
+    });
+    const report = jest.fn();
+    const background = new GltfCatalogBackground(
+      'games',
+      'engine',
+      'test',
+      report,
+    );
+    expect(background.snapshot().error).toBe('startup failed');
+    background.snapshot();
+    await expect(background.settled()).rejects.toThrow('startup failed');
+    expect(Worker).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledTimes(1);
+    await background.close();
+  });
+
+  it('gives the saved bootstrap snapshot a new revision before scanning finishes', async () => {
+    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const initial = background.snapshot();
+    expect(initial.revision).toBe(-1);
+    worker.emit('message', {
+      snapshot: {
+        enabled: true,
+        resources: [
+          { type: 'model', name: 'saved', config: 'figure/config.json' },
+        ],
+        issues: [],
+        revision: 0,
+        indexing: true,
+      },
+    });
+    expect(background.snapshot().revision).not.toBe(initial.revision);
+    expect(background.snapshot()).toMatchObject({
+      indexing: true,
+      resources: [{ name: 'saved' }],
+    });
+    await background.close();
+  });
+});
