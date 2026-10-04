@@ -121,6 +121,11 @@ export class GltfCatalogBackground {
     }
   }
 
+  setRuntimes(runtime: { resources: GltfCatalogEntry[]; issues: string[] }) {
+    this.start();
+    if (!this.closed && this.worker) this.worker.postMessage({ type: 'runtime', runtime });
+  }
+
   settled(): Promise<GltfCatalogSnapshot> {
     this.start();
     if (this.closed)

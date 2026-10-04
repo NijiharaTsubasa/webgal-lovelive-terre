@@ -178,6 +178,10 @@ export class WebgalFsService {
     return this.catalogSnapshot(gameName, await this.getCatalogIndex(gameName));
   }
 
+  updateGltfRuntimes(gameName: string, runtime: Parameters<GltfCatalogBackground['setRuntimes']>[0]) {
+    this.catalogIndexes.get(gameName)?.setRuntimes(runtime);
+  }
+
   async ensureGltfCatalog(gameName: string) {
     this.catalogPins.set(gameName, (this.catalogPins.get(gameName) ?? 0) + 1);
     const timer = this.catalogIdleTimers.get(gameName);
@@ -195,12 +199,6 @@ export class WebgalFsService {
     }
   }
 
-  async rebuildGltfCatalog(gameName: string) {
-    await this.catalogIndexes.get(gameName)?.close();
-    this.catalogIndexes.delete(gameName);
-    return this.getGltfCatalog(gameName);
-  }
-
   async refreshGltfCatalogForPath(path: string, changed = true) {
     try {
       const normalized = this.normalizeFsPath(path);
@@ -212,10 +210,10 @@ export class WebgalFsService {
         !gameName ||
         !(
           inner === 'webgal-engine.json' ||
-          inner === 'game/figure' ||
-          inner.startsWith('game/figure/') ||
-          inner === 'game/scene' ||
-          inner.startsWith('game/scene/')
+          inner === 'game/3d/motion' ||
+          inner.startsWith('game/3d/motion/') ||
+          inner === 'game/3d/mtn_exp' ||
+          inner.startsWith('game/3d/mtn_exp/')
         )
       )
         return;
@@ -233,6 +231,9 @@ export class WebgalFsService {
     const root = UserDataService.getGameRoot();
     const rel = relative(root, path);
     if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return operation();
+    const inner = rel.split(sep).slice(1).join('/');
+    if (inner && !['game', 'game/3d', 'game/3d/motion', 'game/3d/mtn_exp'].includes(inner) &&
+        !inner.startsWith('game/3d/motion/') && !inner.startsWith('game/3d/mtn_exp/')) return operation();
     const names = rel ? [rel.split(sep)[0]] : [...new Set([...this.catalogIndexes.keys(), ...this.catalogSessions.keys()])];
     for (const name of names) this.catalogSuspensions.set(name, (this.catalogSuspensions.get(name) ?? 0) + 1);
     try {

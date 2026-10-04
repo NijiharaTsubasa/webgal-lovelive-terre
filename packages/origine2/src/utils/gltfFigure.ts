@@ -3,6 +3,7 @@ export interface GltfResourceEntry {
   name: string;
   config: string;
   description?: string;
+  preview?: string;
 }
 
 export interface GltfCatalogResult {
@@ -23,24 +24,6 @@ export function isLoveliveEngine(manifest: unknown): boolean {
 
 export function isGltfConfigPath(path: string): boolean {
   return /(?:^|\/)config\.json$/i.test(path.split(/[?#]/)[0].replace(/\\/g, '/'));
-}
-
-export function catalogFigurePaths(resources: GltfResourceEntry[]): Set<string> {
-  const base = 'https://resource.invalid/gltf-resources.json';
-  const paths = new Set<string>();
-  for (const resource of resources) {
-    if (resource.type !== 'model') continue;
-    const url = new URL(resource.config, base);
-    if (url.origin === 'https://resource.invalid' && url.pathname.startsWith('/figure/')) {
-      paths.add(decodeURIComponent(url.pathname.slice('/figure/'.length)));
-    }
-  }
-  return paths;
-}
-
-export function canChooseFigureFile(path: string, enabled: boolean): boolean {
-  const normalized = path.replace(/\\/g, '/').replace(/^figure\//, '');
-  return !isGltfConfigPath(normalized) || enabled;
 }
 
 export function gltfFigureSelectionError(config: unknown): string | null {

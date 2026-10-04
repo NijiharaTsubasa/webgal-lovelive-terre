@@ -11,7 +11,6 @@ import {
   sep,
 } from 'path';
 import {
-  CatalogChangedError,
   CatalogInventory,
   generateGltfResourceCatalog,
   invalidateCatalogFile,
@@ -83,9 +82,9 @@ export class GltfCatalogIndex {
     return (
       inner === 'index.html' ||
       inner === 'webgal-engine.json' ||
-      (inner.startsWith('game/figure/') &&
-        (basename(inner) === 'config.json' ||
-          /\.(?:mtn|glb)$/.test(inner) ||
+      ((inner.startsWith('game/3d/motion/') || inner.startsWith('game/3d/mtn_exp/')) &&
+        ((inner.startsWith('game/3d/mtn_exp/') && basename(inner) === 'config.json') ||
+          /\.(?:mtn|motionbin)$/.test(inner) ||
           inner.endsWith('.exp.json')))
     );
   }
@@ -115,9 +114,16 @@ export class GltfCatalogIndex {
     return state;
   }
 
+  setRuntimes(runtime: CatalogInventory['runtime']) {
+    const state = this.state(this.gameName);
+    state.inventory.runtime = runtime;
+    state.dirty = true;
+  }
+
   start() {
     if (this.closed) throw new Error('glTF resource index is closed');
     if (this.starting) return this.starting;
+    this.state(this.gameName);
     const began = Date.now();
     const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)}s`;
     const fileCount = () => this.games.get(this.gameName)?.inventory.files.size ?? 0;
@@ -132,7 +138,9 @@ export class GltfCatalogIndex {
       );
     }, 10000);
     this.starting = new Promise<void>((done, reject) => {
-      this.watcher = watch(join(this.root, this.gameName), {
+      // Observe the shared parent so a missing motion root can be created later.
+      // The ignored predicate only admits the two motion trees.
+      this.watcher = watch(join(this.root, this.gameName, 'game/3d'), {
         followSymlinks: false,
         usePolling: false,
         atomic: true,
@@ -146,8 +154,8 @@ export class GltfCatalogIndex {
           if (
             inner &&
             inner !== 'game' &&
-            inner !== 'game/figure' &&
-            !inner.startsWith('game/figure/') &&
+            inner !== 'game/3d' && inner !== 'game/3d/motion' && inner !== 'game/3d/mtn_exp' &&
+            !inner.startsWith('game/3d/motion/') && !inner.startsWith('game/3d/mtn_exp/') &&
             inner !== 'index.html' &&
             inner !== 'webgal-engine.json'
           )
@@ -173,7 +181,7 @@ export class GltfCatalogIndex {
         if (
           location &&
           (this.relevant(location.inner) ||
-            (location.inner.startsWith('game/figure/') &&
+            ((location.inner.startsWith('game/3d/motion/') || location.inner.startsWith('game/3d/mtn_exp/')) &&
               !extname(location.inner)))
         ) {
           this.state(location.game).settlingUntil = Date.now() + 250;
@@ -217,7 +225,7 @@ export class GltfCatalogIndex {
     if (error.code !== 'EBUSY' || typeof error.path !== 'string') return false;
     const path = resolve(error.path);
     const location = this.locate(path);
-    if (!location || (!this.relevant(location.inner) && location.inner !== 'game/figure' && !location.inner.startsWith('game/figure/'))) return false;
+    if (!location || (!this.relevant(location.inner) && !['game/3d/motion', 'game/3d/mtn_exp'].includes(location.inner) && !(location.inner.startsWith('game/3d/motion/') || location.inner.startsWith('game/3d/mtn_exp/')))) return false;
     const existing = this.recoveries.get(path);
     const recovery = existing ?? { attempts: 0, previous: this.state(location.game).result?.resources ?? [] };
     if (recovery.timer) clearTimeout(recovery.timer);
@@ -399,11 +407,6 @@ export class GltfCatalogIndex {
           state.error = undefined;
           this.publish(state, state.dirty);
         } catch (error) {
-          if (error instanceof CatalogChangedError) {
-            state.dirty = true;
-            await new Promise((done) => setTimeout(done, 50));
-            continue;
-          }
           state.error = error;
           this.publish(state, false);
           throw error;
@@ -439,11 +442,16 @@ export class GltfCatalogIndex {
     await this.start();
     const location = this.locate(path);
     if (!location) return;
+    if (location.inner === 'game/3d/runtime' || location.inner.startsWith('game/3d/runtime/')) {
+      this.state(location.game).inventory.runtime = undefined;
+      this.state(location.game).dirty = true;
+      return flush ? this.get(location.game) : undefined;
+    }
     if (
       !this.relevant(location.inner) &&
       location.inner &&
-      location.inner !== 'game/figure' &&
-      !location.inner.startsWith('game/figure/')
+      !['game/3d/motion', 'game/3d/mtn_exp'].includes(location.inner) &&
+      !(location.inner.startsWith('game/3d/motion/') || location.inner.startsWith('game/3d/mtn_exp/'))
     )
       return;
     let stat;

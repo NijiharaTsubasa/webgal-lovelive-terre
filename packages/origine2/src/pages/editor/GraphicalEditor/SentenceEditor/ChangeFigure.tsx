@@ -21,7 +21,7 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
-import { canChooseFigureFile, gltfFigureOptions, gltfFigureSelectionError, isGltfConfigPath } from "@/utils/gltfFigure";
+import { gltfFigureOptions, isGltfConfigPath } from "@/utils/gltfFigure";
 import useGltfCatalog from '@/hooks/useGltfCatalog';
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
@@ -72,6 +72,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const [isJsonlFormat, setIsJsonlFormat] = useState(false);
   const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
+  const [isConfigLive2D, setIsConfigLive2D] = useState(false);
+  const [figurePicker3D, setFigurePicker3D] = useState(isGltfConfigPath(props.sentence.content));
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
   const motionDescriptions = useMemo(() => new Map(gltfCatalog.resources
     .filter(entry => entry.type === 'motion' && typeof entry.description === 'string' && entry.description.trim())
@@ -252,6 +254,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       setL2dExpressionsList([]);
       setSpineSkinsList([]);
       setIsGltfFormat(false);
+      setIsConfigLive2D(false);
       setSupportsLive2DExpressions(false);
     }
 
@@ -261,15 +264,32 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       // A valid selected config can be classified while its background index is
       // still being built, including a file copied after the picker opened.
       if (gltfCatalog.enabled) {
-        axios.get(`/games/${gameDir}/game/figure/${pathRaw}`, requestOptions).then(async response => {
+        axios.get(`/games/${encodeURIComponent(gameDir)}/game/3d/figure/${pathRaw}`, requestOptions).catch(error => {
+          if (error.response?.status === 404) return axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${pathRaw}`, requestOptions);
+          throw error;
+        }).then(async response => {
           if (controller.signal.aborted) return;
+          const modelOptions = gltfFigureOptions(response.data, gltfCatalog.resources);
+          if (!modelOptions) {
+            setIsConfigLive2D(!!response.data?.motions || !!response.data?.FileReferences);
+            setL2dMotionsList(Object.keys(response.data?.motions ?? {}));
+            setL2dExpressionsList((response.data?.expressions ?? []).map((entry: { name: string }) => entry.name));
+            return;
+          }
+          setIsGltfFormat(true);
+          setSupportsLive2DExpressions(false);
+          setL2dMotionsList(modelOptions.motions);
+          setL2dExpressionsList(modelOptions.expressions);
           const adapterPaths = [...new Set(gltfCatalog.resources.filter(entry => entry.type === 'garupa-expression-adapter').map(entry => entry.config))];
-          const catalogUrl = new URL(`/games/${encodeURIComponent(gameDir)}/game/gltf-resources.json`, window.location.origin);
-          const adapterConfigs = await Promise.all(adapterPaths.map(path => axios.get(new URL(path, catalogUrl).href, requestOptions).then(response => response.data)));
+          const catalogUrl = new URL(`/games/${encodeURIComponent(gameDir)}/game/`, window.location.origin);
+          const adapterConfigs = await Promise.all(adapterPaths.map(path => axios.get(new URL(path, catalogUrl).href, requestOptions)
+            .then(response => response.data).catch(error => {
+              if (!controller.signal.aborted) console.warn('glTF expression adapter could not be read:', error);
+              return null;
+            })));
           if (controller.signal.aborted) return;
           const options = gltfFigureOptions(response.data, gltfCatalog.resources, adapterConfigs);
           if (!options) return;
-          setIsGltfFormat(true);
           setSupportsLive2DExpressions(options.supportsLive2DExpressions);
           setL2dMotionsList(options.motions);
           setL2dExpressionsList(options.expressions);
@@ -404,8 +424,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   // 是否为 Live2D 变体（json/jsonl/wmdl）
   const isLive2DVariant = useMemo(() => {
     const url = figureFile.value.toLowerCase();
-    return !isGltfConfigPath(url) && (url.endsWith('.json') || url.endsWith('.jsonl') || url.endsWith('.wmdl'));
-  }, [figureFile.value]);
+    return isConfigLive2D || (!isGltfConfigPath(url) && (url.endsWith('.json') || url.endsWith('.jsonl') || url.endsWith('.wmdl')));
+  }, [figureFile.value, isConfigLive2D]);
 
   const submit = () => {
     const submitString = combineSubmitString(
@@ -702,31 +722,32 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             <span>{figureFile.value}</span>
             <ChooseFile
               title={t`选择立绘文件`}
-              basePath={['figure']}
-              selectedFilePath={figureFile.value}
+              toolbar={gltfCatalog.enabled && <>
+                <span>{t`切换立绘类型`}</span>
+                <Button onClick={() => setFigurePicker3D(value => !value)}>{figurePicker3D ? '3D' : '2D'}</Button>
+              </>}
+              basePath={figurePicker3D && gltfCatalog.enabled ? ['3d', 'figure'] : ['figure']}
+              chooseModelDirectory={figurePicker3D && gltfCatalog.enabled}
+              selectedFilePath={figurePicker3D === isGltfConfigPath(figureFile.value) ? figureFile.value : undefined}
               onOpen={() => { void refreshGltfCatalog(); }}
-              fileFilter={file => canChooseFigureFile(file.path, gltfCatalog.enabled)}
+              fileFilter={figurePicker3D && gltfCatalog.enabled ? file => isGltfConfigPath(file.path) : undefined}
               onChange={async (fileDesc) => {
                 const request = ++figureSelectionRequest.current;
                 setFigureSelectionError("");
-                if (fileDesc && isGltfConfigPath(fileDesc.name)) {
-                  // The open picker may have indexed files copied after the panel's last refresh.
-                  await refreshGltfCatalog();
-                  if (request !== figureSelectionRequest.current) return;
-                }
-                if (gltfCatalog.enabled && fileDesc && /\.json$/i.test(fileDesc.name)) {
+                if (figurePicker3D && gltfCatalog.enabled && fileDesc) {
                   try {
-                    const response = await axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${fileDesc.name.split('/').map(encodeURIComponent).join('/')}`);
+                    const path = fileDesc.isDir ? fileDesc.name : fileDesc.name.replace(/\/config\.json$/i, '');
+                    const { data } = await axios.post('/api/manageGame/selectGltfModel', { gameName: gameDir, path });
                     if (request !== figureSelectionRequest.current) return;
-                    const error = gltfFigureSelectionError(response.data);
-                    if (error) {
-                      setFigureSelectionError(error);
-                      return;
-                    }
-                  } catch {
-                    if (request === figureSelectionRequest.current) setFigureSelectionError("无法读取所选文件，请检查文件内容或路径。");
-                    return;
+                    if (data.error) { setFigureSelectionError(data.error); return; }
+                    figureFile.set(`${path}/config.json`);
+                    void refreshGltfCatalog();
+                    submit();
+                  } catch (error) {
+                    if (request === figureSelectionRequest.current) setFigureSelectionError(axios.isAxiosError(error)
+                      ? String(error.response?.data?.message ?? error.message) : String(error));
                   }
+                  return;
                 }
                 figureFile.set(fileDesc?.name ?? "");
                 submit();
@@ -739,7 +760,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             />
           </div>
           {figureSelectionError && <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)' }}>{figureSelectionError}</div>}
-          {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">正在索引 glTF 资源，列表会自动更新。</div>}
+          {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">正在读取 3D 动作与表情，列表会自动更新。</div>}
           {gltfCatalog.error && <div role="alert">{gltfCatalog.error}</div>}
         </CommonOptions>}
       <CommonOptions title={t`z-index`} key="z-index">
@@ -770,7 +791,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
 
       {(isLive2DVariant || isSpineJsonFormat || isGltfFormat) && (
         <>
-          <CommonOptions key="24" title={isGltfFormat ? 'glTF/Live2D 动作' : isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
+          <CommonOptions key="24" title={isGltfFormat ? '3D/Live2D 动作' : isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
             <SearchableCascader
               optionList={l2dMotionsList}
               optionDescriptions={isGltfFormat ? motionDescriptions : undefined}
@@ -783,7 +804,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             />
           </CommonOptions>
           {!isSpineJsonFormat && (
-            <CommonOptions key="25" title={isGltfFormat ? (supportsLive2DExpressions ? 'glTF/Live2D 表情' : 'glTF 表情(当前模型不支持 Live2D 表情)') : t`Live2D 表情`}>
+            <CommonOptions key="25" title={isGltfFormat ? (supportsLive2DExpressions ? '3D/Live2D 表情' : '3D 表情(当前模型不支持 Live2D 表情)') : t`Live2D 表情`}>
               <SearchableCascader
                 optionList={l2dExpressionsList}
                 value={currentExpression.value}

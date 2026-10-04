@@ -34,7 +34,7 @@ describe('WebgalFsService', () => {
   it('refreshes the glTF catalog after resource edits, renames and deletions', async () => {
     const games = join(testRoot, 'games');
     const game = join(games, 'demo');
-    const resource = join(game, 'game', 'figure', 'motions');
+    const resource = join(game, 'game', '3d', 'mtn_exp');
     await fs.mkdir(resource, { recursive: true });
     await fs.writeFile(join(game, 'index.html'), '');
     await fs.writeFile(
@@ -47,33 +47,22 @@ describe('WebgalFsService', () => {
     jest
       .spyOn(UserDataService, 'getEngineTemplateRoot')
       .mockReturnValue(join(testRoot, 'template'));
-    const config = join(resource, 'config.json');
-    const catalog = join(game, 'game', 'gltf-resources.json');
+    const config = join(resource, 'idle.mtn');
     await service.getGltfCatalog('demo');
-    await service.updateTextFile(
-      config,
-      JSON.stringify({
-        components: [{ type: 'motion', name: 'idle', src: 'idle.json' }],
-      }),
-    );
+    await service.updateTextFile(config, '{}');
     await service.ensureGltfCatalog('demo');
     expect(
-      JSON.parse(await fs.readFile(catalog, 'utf8')).resources[0].name,
+      (await service.ensureGltfCatalog('demo')).resources[0].name,
     ).toBe('idle');
     await service.renameFile(config, 'not-a-manifest.json');
     await service.ensureGltfCatalog('demo');
-    expect(JSON.parse(await fs.readFile(catalog, 'utf8')).resources).toEqual(
+    expect((await service.ensureGltfCatalog('demo')).resources).toEqual(
       [],
     );
-    await service.updateTextFile(
-      config,
-      JSON.stringify({
-        components: [{ type: 'motion', name: 'walk', src: 'walk.json' }],
-      }),
-    );
+    await service.updateTextFile(config, '{}');
     await service.deleteFile(config);
     await service.ensureGltfCatalog('demo');
-    expect(JSON.parse(await fs.readFile(catalog, 'utf8')).resources).toEqual(
+    expect((await service.ensureGltfCatalog('demo')).resources).toEqual(
       [],
     );
   });
@@ -99,7 +88,7 @@ describe('WebgalFsService', () => {
   it('shares initialization across simultaneous catalog readers', async () => {
     const games = join(testRoot, 'games');
     const game = join(games, 'demo');
-    const config = join(game, 'game/figure/motions/config.json');
+    const config = join(game, 'game/3d/mtn_exp/idle.mtn');
     await fs.mkdir(join(config, '..'), { recursive: true });
     await fs.writeFile(join(game, 'index.html'), '');
     await fs.writeFile(
@@ -123,7 +112,7 @@ describe('WebgalFsService', () => {
     expect(results.every((result) => result.indexing)).toBe(true);
     expect((service as any).catalogIndexes.size).toBe(1);
     expect(start.mock.instances.every(instance => instance === start.mock.instances[0])).toBe(true);
-    expect((await service.ensureGltfCatalog('demo')).resources[0].name).toBe('idle');
+    expect((await service.ensureGltfCatalog('demo')).resources).toEqual([expect.objectContaining({ name: 'idle' })]);
   });
 
   it('returns a snapshot without waiting for slow discovery', async () => {
@@ -162,7 +151,7 @@ describe('WebgalFsService', () => {
     let finish: () => void;
     const copied = new Promise<void>(resolve => { finish = resolve; });
     const cp = jest.spyOn(fs, 'cp').mockImplementation(() => copied);
-    const operation = service.copy(join(testRoot, 'source'), join(root, 'demo/game/figure'));
+    const operation = service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/motion'));
     while (!cp.mock.calls.length) await Promise.resolve();
     expect(close).toHaveBeenCalledTimes(1);
     expect((service as any).catalogIndexes.size).toBe(0);
@@ -188,6 +177,17 @@ describe('WebgalFsService', () => {
       await jest.advanceTimersByTimeAsync(10000);
       expect(close).toHaveBeenCalledTimes(1);
     } finally { jest.useRealTimers(); }
+  });
+  it('does not restart motion discovery when copying model or runtime packages', async () => {
+    jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
+    const close = jest.spyOn(GltfCatalogBackground.prototype, 'close').mockResolvedValue();
+    jest.spyOn(fs, 'cp').mockResolvedValue();
+    await service.gltfCatalogSession('demo', 'tab', true);
+    const root = UserDataService.getGameRoot();
+    await service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/figure/new'));
+    await service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/runtime/new'));
+    expect(close).not.toHaveBeenCalled();
+    expect((service as any).catalogIndexes.size).toBe(1);
   });
 
   it('rejects invalid marks in path segments', () => {

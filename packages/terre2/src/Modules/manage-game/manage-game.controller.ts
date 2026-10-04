@@ -299,7 +299,7 @@ export class ManageGameController {
 
   @Post('updateGltfResourceCatalog')
   async updateGltfResourceCatalog(@Body() data: { gameName: string; revision?: number }) {
-    return this.manageGame.updateGltfResourceCatalog(data.gameName, false, data.revision);
+    return this.manageGame.updateGltfResourceCatalog(data.gameName, data.revision);
   }
 
   @Post('gltfCatalogSession')
@@ -307,9 +307,14 @@ export class ManageGameController {
     return this.manageGame.gltfCatalogSession(data.gameName, data.sessionId, data.active);
   }
 
-  @Post('rebuildGltfResourceCatalog')
-  async rebuildGltfResourceCatalog(@Body() data: { gameName: string }) {
-    return this.manageGame.updateGltfResourceCatalog(data.gameName, true);
+  @Post('browseGltfModels')
+  async browseGltfModels(@Body() data: { gameName: string; directory: string }) {
+    return this.manageGame.browseGltfModels(data.gameName, data.directory);
+  }
+
+  @Post('selectGltfModel')
+  async selectGltfModel(@Body() data: { gameName: string; path: string }) {
+    return this.manageGame.selectGltfModel(data.gameName, data.path);
   }
 
   @Get('getGameConfig/:gameName')

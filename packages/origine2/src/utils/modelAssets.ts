@@ -4,6 +4,7 @@ export interface ModelAssetInfo {
   name: string;
   description?: string;
   configUrl: string;
+  preview?: string;
 }
 
 export function modelAssetMap(rootPath: string[], resources: GltfResourceEntry[], enabled: boolean) {
@@ -14,12 +15,12 @@ export function modelAssetMap(rootPath: string[], resources: GltfResourceEntry[]
   for (const resource of resources) {
     if (resource.type !== 'model') continue;
     try {
-      const url = new URL(resource.config, `https://resource.invalid${gameRoot}gltf-resources.json`);
-      if (url.origin !== 'https://resource.invalid' || !url.pathname.startsWith(`${gameRoot}figure/`)) continue;
+      const url = new URL(resource.config, `https://resource.invalid${gameRoot}`);
+      if (url.origin !== 'https://resource.invalid' || !url.pathname.startsWith(`${gameRoot}3d/figure/`)) continue;
       const path = url.pathname.slice(gameRoot.length).split('/').map(decodeURIComponent).join('/');
       if (!path.endsWith('/config.json') || (root && !path.startsWith(`${root}/`))) continue;
       const configPath = root ? path.slice(root.length + 1) : path;
-      const info = { name: resource.name, description: resource.description, configUrl: url.pathname };
+      const info = { name: resource.name, description: resource.description, preview: resource.preview, configUrl: url.pathname };
       models.set(configPath, info);
       models.set(configPath.slice(0, configPath.lastIndexOf('/')), info);
     } catch { /* Invalid catalog paths are not selectable model metadata. */ }
@@ -40,6 +41,7 @@ export function modelPreview(config: unknown, name: string): string | undefined 
 export function createModelPreviewLoader(read: (url: string) => Promise<unknown>, limit = 12) {
   const cache = new Map<string, Promise<string | undefined>>();
   return (model: ModelAssetInfo) => {
+    if (model.preview) return Promise.resolve(model.preview);
     const key = `${model.configUrl}\n${model.name}`;
     let result = cache.get(key);
     if (!result) {

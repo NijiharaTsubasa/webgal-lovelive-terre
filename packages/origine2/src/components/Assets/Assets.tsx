@@ -118,6 +118,7 @@ export default function Assets({
   fileFunction,
   allowedExtNames,
   fileFilter,
+  chooseModelDirectory = false,
 }: {
   rootPath: string[];
   basePath?: string[]; // 相对于rootPath的路径
@@ -128,6 +129,7 @@ export default function Assets({
   fileFunction?: IFileFunction;
   allowedExtNames?: string[];
   fileFilter?: (file: IFile) => boolean;
+  chooseModelDirectory?: boolean;
 }) {
   const { mutate } = useSWRConfig();
 
@@ -285,6 +287,10 @@ export default function Assets({
 
   const handleOpenFile = async (file: IFile) => {
     if (file.isDir) {
+      if (chooseModelDirectory && models.has(file.path)) {
+        fileFunction?.open?.({ ...file }, 'asset');
+        return;
+      }
       // lastPath.value = [...currentPath.value, file.name];
       currentPath.set([...currentPath.value, file.name]);
       filterText.set('');

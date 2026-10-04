@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'worker_threads';
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { GltfCatalogIndex } from './gltf-catalog-index';
+import { scanGltfRuntimes } from './gltf-resource-catalog';
 import type { GltfCatalogSnapshot } from './gltf-catalog-background';
 
 const { root, engineRoot, gameName } = workerData;
@@ -64,23 +65,19 @@ async function bootstrap() {
       await fs.readFile(join(selectedEngine, 'webgal-engine.json'), 'utf8'),
     );
     snapshot.enabled = engine?.id === 'webgal-lovelive.lovelive';
-    if (snapshot.enabled) {
-      try {
-        const saved = JSON.parse(
-          await fs.readFile(
-            join(gameRoot, 'game', 'gltf-resources.json'),
-            'utf8',
-          ),
-        );
-        if (Array.isArray(saved.resources))
-          snapshot.resources = saved.resources;
-      } catch {}
-    }
   } catch {}
   if (!snapshot.enabled) snapshot.indexing = false;
+  else snapshot.revision = -1;
   initialSnapshot = snapshot;
   post({ type: 'snapshot', snapshot });
-  if (snapshot.enabled) await index.get(gameName);
+  if (snapshot.enabled) {
+    // Runtime registration must be ready before large motion discovery begins.
+    const runtime = await scanGltfRuntimes(gameRoot);
+    initialSnapshot = { ...snapshot, ...runtime, revision: 0 };
+    post({ type: 'snapshot', snapshot: initialSnapshot });
+    index.setRuntimes(runtime);
+    await index.get(gameName);
+  }
 }
 
 // Preserve ordering for explicit writes and export requests; external watcher updates
@@ -121,6 +118,10 @@ parentPort.on('message', (message) => {
           requestId: message.requestId,
           snapshot: { ...result, indexing: false },
         });
+      } else if (message.type === 'runtime') {
+        index.setRuntimes(message.runtime);
+        const result = await index.get(gameName);
+        post({ type: 'snapshot', snapshot: { ...result, indexing: false } });
       }
     } catch (error) {
       if (message.requestId !== undefined)

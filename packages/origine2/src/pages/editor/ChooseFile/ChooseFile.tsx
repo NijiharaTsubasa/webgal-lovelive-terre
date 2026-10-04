@@ -23,6 +23,8 @@ export interface IChooseFile {
   hiddenFiles?: string[];
   fileFilter?: (file: IFile) => boolean;
   onOpen?: () => void;
+  chooseModelDirectory?: boolean;
+  toolbar?: ReactNode;
 }
 
 export default function ChooseFile(props: IChooseFile) {
@@ -168,15 +170,20 @@ export default function ChooseFile(props: IChooseFile) {
           <div className={styles.chooseFileTitle}>
             {props.title ?? t`选择文件`}
           </div>
+          {props.toolbar && <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px' }}>{props.toolbar}</div>}
           <Assets
+            key={JSON.stringify([basePath, props.selectedFilePath, props.chooseModelDirectory])}
             rootPath={rootPath}
             basePath={basePath}
-            selectedFilePath={props.selectedFilePath?.split('/')}
+            selectedFilePath={(props.chooseModelDirectory
+              ? props.selectedFilePath?.replace(/(?:^|\/)config\.json$/i, '')
+              : props.selectedFilePath)?.split('/').filter(Boolean)}
             isProtected
             fileFunction={fileFunction}
             fileConfig={fileConfig}
             allowedExtNames={props.extNames}
             fileFilter={props.fileFilter}
+            chooseModelDirectory={props.chooseModelDirectory}
           />
           {invalidRanges.value.length > 0 &&
             <div className={styles.chooseFileFooterWarning}>

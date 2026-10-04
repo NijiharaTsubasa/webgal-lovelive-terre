@@ -26,21 +26,21 @@ describe('GltfCatalogBackground', () => {
       snapshot: {
         enabled: true,
         resources: [
-          { type: 'motion', name: 'new', config: 'figure/config.json' },
+          { type: 'motion', name: 'new.motionbin', config: '3d/motion/new.motionbin' },
         ],
         issues: [],
         revision: 1,
         indexing: false,
       },
     });
-    expect(background.snapshot().resources[0].name).toBe('new');
+    expect(background.snapshot().resources[0].name).toBe('new.motionbin');
     expect(Worker).toHaveBeenCalledTimes(1);
     await background.close();
   });
 
   it('posts notifications before a settled request and waits only in settled()', async () => {
     const background = new GltfCatalogBackground('games', 'engine', 'test');
-    background.notify('games/test/game/figure/config.json');
+    background.notify('games/test/game/3d/motion/new.motionbin');
     const complete = background.settled();
     expect(
       worker.postMessage.mock.calls.map(([message]) => message.type),
@@ -60,6 +60,14 @@ describe('GltfCatalogBackground', () => {
       revision: 2,
       indexing: false,
     });
+    await background.close();
+  });
+  it('reuses an explicit runtime refresh result instead of issuing a filesystem notification', async () => {
+    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const runtime = { resources: [{ type: 'shader', name: 'Eye', config: '3d/runtime/deps/config.json' }], issues: [] };
+    background.setRuntimes(runtime);
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'runtime', runtime });
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
     await background.close();
   });
 
@@ -149,7 +157,7 @@ describe('GltfCatalogBackground', () => {
     await background.close();
   });
 
-  it('gives the saved bootstrap snapshot a new revision before scanning finishes', async () => {
+  it('publishes bootstrap state with a new revision before scanning finishes', async () => {
     const background = new GltfCatalogBackground('games', 'engine', 'test');
     const initial = background.snapshot();
     expect(initial.revision).toBe(-1);
@@ -157,7 +165,7 @@ describe('GltfCatalogBackground', () => {
       snapshot: {
         enabled: true,
         resources: [
-          { type: 'model', name: 'saved', config: 'figure/config.json' },
+          { type: 'shader', name: 'runtime', config: '3d/runtime/deps/config.json' },
         ],
         issues: [],
         revision: 0,
@@ -167,7 +175,7 @@ describe('GltfCatalogBackground', () => {
     expect(background.snapshot().revision).not.toBe(initial.revision);
     expect(background.snapshot()).toMatchObject({
       indexing: true,
-      resources: [{ name: 'saved' }],
+      resources: [{ name: 'runtime' }],
     });
     await background.close();
   });
