@@ -16,26 +16,27 @@ describe('motion metadata indexing races', () => {
       join(root, 'webgal-engine.json'),
       JSON.stringify({ id: 'webgal-lovelive.lovelive' }),
     );
-    await fs.mkdir(join(root, 'game/3d/mtn_exp'), { recursive: true });
+    await fs.mkdir(join(root, 'game/3d/motion'), { recursive: true });
   });
   afterEach(async () => {
     jest.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
-  it('does not retain stale fade metadata when a change arrives during a config read', async () => {
-    const config = join(root, 'game/3d/mtn_exp/config.json'),
-      mtn = join(root, 'game/3d/mtn_exp/idle.mtn');
-    const contents = (fade_in: number) =>
-      JSON.stringify({
-        components: [{ type: 'garupa-motion', src: 'idle.mtn', fade_in }],
-      });
-    await fs.writeFile(config, contents(123));
-    await fs.writeFile(mtn, '{}');
+  it('does not retain stale motion metadata when a change arrives during a header read', async () => {
+    const motion = join(root, 'game/3d/motion/idle.motionbin');
+    const contents = (description: string) => {
+      const header = Buffer.from(JSON.stringify({ description }));
+      const prefix = Buffer.alloc(12);
+      prefix.write('MOTION');
+      prefix.writeUInt32LE(header.length, 8);
+      return Buffer.concat([prefix, header]);
+    };
+    await fs.writeFile(motion, contents('first'));
     const inventory: CatalogInventory = {
-      files: new Set([config, mtn]),
+      files: new Set([motion]),
       runtime: { resources: [], issues: [] },
     };
-    const original = fs.readFile;
+    const original = fs.open;
     let release: () => void, entered: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -44,14 +45,21 @@ describe('motion metadata indexing races', () => {
       entered = resolve;
     });
     let first = true;
-    jest.spyOn(fs, 'readFile').mockImplementation((async (path, ...args) => {
-      const value = await original(path, ...(args as [any]));
-      if (String(path) === config && first) {
-        first = false;
-        entered();
-        await gate;
+    jest.spyOn(fs, 'open').mockImplementation((async (path, ...args) => {
+      const handle = await original(path, ...(args as [any]));
+      if (String(path) === motion && first) {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...readArgs) => {
+          const value = await read(...readArgs);
+          if (readArgs[3] === 12 && first) {
+            first = false;
+            entered();
+            await gate;
+          }
+          return value;
+        }) as any;
       }
-      return value;
+      return handle;
     }) as any);
     const reading = generateGltfResourceCatalog(
       root,
@@ -60,17 +68,14 @@ describe('motion metadata indexing races', () => {
       inventory,
     );
     await ready;
-    await fs.writeFile(config, contents(456));
-    invalidateCatalogFile(inventory, config);
+    await fs.writeFile(motion, contents('after'));
+    invalidateCatalogFile(inventory, motion);
     release();
     await reading;
     expect(
       (await generateGltfResourceCatalog(root, false, undefined, inventory))
-        .resources[0].fade_in,
-    ).toBe(456);
-    expect(
-      JSON.parse(await fs.readFile(config, 'utf8')).components[0].fade_in,
-    ).toBe(456);
+        .resources[0].description,
+    ).toBe('after');
   });
   it('does not persist a full resource catalog and rejects cancelled inventories', async () => {
     const inventory: CatalogInventory = { files: new Set(), cancelled: true };

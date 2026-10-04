@@ -83,8 +83,7 @@ export class GltfCatalogIndex {
       inner === 'index.html' ||
       inner === 'webgal-engine.json' ||
       ((inner.startsWith('game/3d/motion/') || inner.startsWith('game/3d/mtn_exp/')) &&
-        ((inner.startsWith('game/3d/mtn_exp/') && basename(inner) === 'config.json') ||
-          /\.(?:mtn|motionbin)$/.test(inner) ||
+        (/\.(?:mtn|motionbin)$/.test(inner) ||
           inner.endsWith('.exp.json')))
     );
   }

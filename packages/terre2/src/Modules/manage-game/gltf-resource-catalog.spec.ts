@@ -41,7 +41,7 @@ describe('fixed glTF resource directories', () => {
     jest.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
-  it('discovers only dedicated motion roots, with path names and editable fades', async () => {
+  it('discovers dedicated motion roots with path names and default fades', async () => {
     await motion('game/3d/motion/llas/idle.motionbin');
     await put('game/3d/motion/config.json', {
       components: [
@@ -85,8 +85,8 @@ describe('fixed glTF resource directories', () => {
         expect.objectContaining({
           type: 'garupa-motion',
           name: 'anon/bye',
-          fade_in: 123,
-          fade_out: 456,
+          fade_in: 500,
+          fade_out: 500,
         }),
         expect.objectContaining({
           type: 'garupa-expression',
@@ -103,6 +103,11 @@ describe('fixed glTF resource directories', () => {
     expect(
       reads.mock.calls.some(
         ([path]) => String(path) === join(root, 'game/3d/motion/config.json'),
+      ),
+    ).toBe(false);
+    expect(
+      reads.mock.calls.some(
+        ([path]) => String(path) === join(root, 'game/3d/mtn_exp/config.json'),
       ),
     ).toBe(false);
     await expect(

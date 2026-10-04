@@ -224,8 +224,7 @@ export async function modelShaderNames(gameRoot: string, model: any) {
 const relevant = (path: string) =>
   path.endsWith('.motionbin') ||
   path.endsWith('.mtn') ||
-  path.endsWith('.exp.json') ||
-  basename(path) === 'config.json';
+  path.endsWith('.exp.json');
 export async function generateGltfResourceCatalog(
   gameRoot: string,
   _changed = false,
@@ -250,8 +249,7 @@ export async function generateGltfResourceCatalog(
     ? (inventory.cache ??= new Map())
     : new Map<string, any>();
   const resources: GltfCatalogEntry[] = [],
-    issues: string[] = [],
-    configs = new Map<string, any>();
+    issues: string[] = [];
   async function cached(path: string, read: () => Promise<any>) {
     if (cache.has(path)) return cache.get(path);
     const generation = inventory?.generations?.get(path) ?? 0;
@@ -259,36 +257,6 @@ export async function generateGltfResourceCatalog(
     if (generation === (inventory?.generations?.get(path) ?? 0))
       cache.set(path, value);
     return value;
-  }
-  for (const path of files
-    .filter(
-      (path) => inside(parameterRoot, path) && basename(path) === 'config.json',
-    )
-    .sort()) {
-    try {
-      configs.set(path, await cached(path, () => jsonFile(path)));
-    } catch (error) {
-      issues.push(`${namePath(game, path)}: ${error.message}`);
-    }
-  }
-  function configured(path: string, type: string) {
-    let dir = dirname(path);
-    const root = inside(parameterRoot, path) ? parameterRoot : motionRoot;
-    while (inside(root, dir)) {
-      const manifest = configs.get(join(dir, 'config.json'));
-      const component = Array.isArray(manifest?.components)
-        ? manifest.components.find(
-            (item) =>
-              item?.type === type &&
-              typeof item.src === 'string' &&
-              resolve(dir, ...item.src.split('/').map(decodeURIComponent)) ===
-                path,
-          )
-        : undefined;
-      if (component) return component;
-      if (dir === root) break;
-      dir = dirname(dir);
-    }
   }
   for (const path of files.sort()) {
     const native = inside(motionRoot, path) && path.endsWith('.motionbin'),
@@ -302,7 +270,6 @@ export async function generateGltfResourceCatalog(
       : undefined;
     if (!type) continue;
     try {
-      const config = native ? undefined : configured(path, type);
       const name = native
         ? namePath(motionRoot, path)
         : namePath(parameterRoot, path).slice(
@@ -323,11 +290,8 @@ export async function generateGltfResourceCatalog(
         const motionGroup = header?.motionGroup;
         if (typeof motionGroup === 'string') entry.motionGroup = motionGroup;
       } else if (type === 'garupa-motion') {
-        entry.fade_in = config?.fade_in ?? 500;
-        entry.fade_out = config?.fade_out ?? 500;
-      } else {
-        if (config?.fade_in !== undefined) entry.fade_in = config.fade_in;
-        if (config?.fade_out !== undefined) entry.fade_out = config.fade_out;
+        entry.fade_in = 500;
+        entry.fade_out = 500;
       }
       resources.push(entry);
     } catch (error) {

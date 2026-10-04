@@ -52,7 +52,7 @@ describe('dedicated motion directory watcher', () => {
     for (let i = 0; i < 10; i++) await index.get(game);
     expect(reads).not.toHaveBeenCalled();
   });
-  it('discovers external additions, updates fades and removes deleted parameters', async () => {
+  it('discovers external additions with default fades and removes deleted parameters', async () => {
     const file = await put('game/3d/mtn_exp/anon/bye.mtn', {});
     await until((result) =>
       result.resources.some((entry) => entry.name === 'anon/bye'),
@@ -60,8 +60,13 @@ describe('dedicated motion directory watcher', () => {
     await put('game/3d/mtn_exp/config.json', {
       components: [{ type: 'garupa-motion', src: 'anon/bye.mtn', fade_in: 42 }],
     });
+    const before = await index.get(game);
+    const after = await index.notify(join(root, game, 'game/3d/mtn_exp/config.json'));
+    expect(after.revision).toBe(before.revision);
     await until((result) =>
-      result.resources.some((entry) => entry.fade_in === 42),
+      result.resources.some(
+        (entry) => entry.fade_in === 500 && entry.fade_out === 500,
+      ),
     );
     await fs.unlink(file);
     await until(

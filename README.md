@@ -6,9 +6,9 @@
 
 ## 必看：如何让 3D 立绘加载 BanG Dream Live2D 表情和动作
 
-默认情况下，3D 立绘不会加载 BanG Dream Live2D 表情和动作，原因是 Live2D 表情和动作和模型绑定，figure 目录中可能有多套重复的表情和动作。为了避免冲突，需要手动指定目录加载供 3D 立绘使用的 Live2D 表情和动作。
+3D 立绘从游戏工程的 `game/3d/mtn_exp` 目录读取 BanG Dream Live2D 表情和动作，文件的相对路径作为动作或表情名称，例如 `anon/angry01`。
 
-1、首先在 `figure` 目录下创建一个新目录，名称任意，例如 `bangdream_live2d` ，后续 3D 立绘会从此目录读取表情和动作。
+1、在游戏工程的 `game/3d` 目录下创建 `mtn_exp` 目录。
 
 2、找到已有的 BanG Dream Live2D 表情和动作，一般位于 `figure/任意mygo_mujica角色/.mtn_exp/expressions/__base__/` 和 `figure/任意mygo_mujica角色/.mtn_exp/motions/PARAM_IMPORT__数字/` 这两个路径，将其中的全部角色名文件夹复制到上一步新建的目录。同名角色文件夹请合并，保留其中的动作和表情文件。
 
@@ -16,7 +16,7 @@
 
 复制好后目录结构应该如下所示：
 ```
-bangdream_live2d
+mtn_exp
 |- anon
     |- angry01.mtn
     |- angry01.exp.json
@@ -25,12 +25,7 @@ bangdream_live2d
 |- ...
 ```
 
-3、在第一步创建的目录中新建 `config.json` 文件，原样复制并保存以下内容：
-```json
-{"components":[]}
-```
-
-4、使用 WebGAL LoveLive Terre 打开一次工程，会自动搜索该目录中的表情和动作，并在 3D 立绘的对应下拉框中显示。
+3、使用 WebGAL LoveLive Terre 打开工程，会自动搜索该目录中的表情和动作，并在 3D 立绘的对应下拉框中显示。
 
 后续增加表情或动作只需复制到此目录，删除表情或动作只需直接删除，界面中的列表会自动刷新。
 
