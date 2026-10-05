@@ -17,8 +17,8 @@ export function rememberFigureMode(is3D: boolean) {
   lastFigure3D = is3D;
 }
 
-export function preferredFigure3D(value: string): boolean {
-  return value && value !== 'none' ? isGltfConfigPath(value) : lastFigure3D ?? false;
+export function preferredFigure3D(value: string, placeholder = ''): boolean {
+  return value && value !== 'none' && value !== placeholder ? isGltfConfigPath(value) : lastFigure3D ?? false;
 }
 
 export interface GltfResourceEntry {

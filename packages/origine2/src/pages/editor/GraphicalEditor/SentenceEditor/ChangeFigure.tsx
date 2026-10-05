@@ -75,7 +75,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [isConfigLive2D, setIsConfigLive2D] = useState(false);
-  const [figurePicker3D, setFigurePicker3D] = useState(() => preferredFigure3D(props.sentence.content));
+  const [figurePicker3D, setFigurePicker3D] = useState(() => preferredFigure3D(props.sentence.content, t`选择立绘文件`));
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
   const [nativeExpressions, setNativeExpressions] = useState<NativeExpressionOptions>({ eyes: [], mouths: [], defaults: {} });
   const [expressionOptionsReady, setExpressionOptionsReady] = useState(false);
@@ -738,7 +738,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               basePath={figurePicker3D && gltfCatalog.enabled ? ['3d', 'figure'] : ['figure']}
               chooseModelDirectory={figurePicker3D && gltfCatalog.enabled}
               selectedFilePath={figurePicker3D === isGltfConfigPath(figureFile.value) ? figureFile.value : undefined}
-              onOpen={() => { setFigurePicker3D(preferredFigure3D(figureFile.value)); void refreshGltfCatalog(); }}
+              onOpen={() => { setFigurePicker3D(preferredFigure3D(figureFile.value, t`选择立绘文件`)); void refreshGltfCatalog(); }}
               fileFilter={figurePicker3D && gltfCatalog.enabled ? file => isGltfConfigPath(file.path) : undefined}
               onChange={async (fileDesc) => {
                 const request = ++figureSelectionRequest.current;
