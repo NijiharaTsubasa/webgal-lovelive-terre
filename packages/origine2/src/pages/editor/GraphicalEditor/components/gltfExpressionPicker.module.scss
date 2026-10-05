@@ -1,0 +1,6 @@
+.trigger { width: 100%; justify-content: flex-start; overflow-wrap: anywhere; }
+.surface { max-width: 90vw; }
+.modes { display: flex; gap: 8px; padding-bottom: 12px; }
+.columns { display: flex; gap: 16px; }
+.column { display: flex; flex-direction: column; gap: 4px; min-width: 120px; max-height: 60vh; overflow-y: auto; }
+.heading { position: sticky; top: 0; background: var(--bg); padding: 6px; font-weight: 600; }

@@ -14,7 +14,7 @@ async function componentHarness(file, modules = {}) {
     Fragment: 'Fragment',
     useState(initial) {
       const index = cursor++;
-      if (!(index in hooks)) hooks[index] = initial;
+      if (!(index in hooks)) hooks[index] = typeof initial === 'function' ? initial() : initial;
       return [hooks[index], value => { hooks[index] = typeof value === 'function' ? value(hooks[index]) : value; }];
     },
     useRef(initial) {
@@ -97,6 +97,60 @@ function nodes(tree, type) {
 }
 
 const store = { use: new Proxy({}, { get: (_, key) => () => key === 'subPage' ? 'test-game' : key === 'cascaderDelimiters' ? ['/'] : () => {} }) };
+
+test('native expression picker submits only a complete combination and does not enumerate combinations', async () => {
+  const harness = await componentHarness('../src/pages/editor/GraphicalEditor/components/GltfExpressionPicker.tsx', {
+    '@/utils/gltfFigure': gltfFigure,
+  });
+  const selected = [];
+  const props = { native: { eyes: ['Sad/左', 'Open'], mouths: ['Smile', 'A'], defaults: { eye: 'Open', closed: 'Smile', open: 'A' } },
+    live2d: ['anon/sad01'], supportsLive2D: true, value: '', onValueChange: value => selected.push(value) };
+  let tree = harness.render(props);
+  nodes(tree, 'Popover')[0].props.onOpenChange(null, { open: true });
+  tree = harness.render(props);
+  assert.equal(nodes(tree, 'SearchableCascader').length, 1, 'default browser is Live2D');
+  nodes(tree, 'Button').find(node => node.children.includes('3D')).props.onClick();
+  tree = harness.render(props);
+  assert.deepEqual(selected, [], 'switching browser does not modify script');
+  assert.equal(nodes(tree, 'Button').length, 9, 'only eye and two mouth columns are rendered');
+  nodes(tree, 'Button').find(node => node.children.includes('Sad/左')).props.onClick();
+  tree = harness.render(props);
+  assert.deepEqual(selected, []);
+  nodes(tree, 'Button').filter(node => node.children.includes('Smile'))[0].props.onClick();
+  tree = harness.render(props);
+  assert.deepEqual(selected, []);
+  nodes(tree, 'Button').filter(node => node.children.includes('A'))[1].props.onClick();
+  assert.deepEqual(selected, ['3d:Sad%2F%E5%B7%A6/Smile/A']);
+});
+
+test('native expression picker handles capability, empty lists, saved choice and absent domains', async () => {
+  const harness = await componentHarness('../src/pages/editor/GraphicalEditor/components/GltfExpressionPicker.tsx', {
+    '@/utils/gltfFigure': gltfFigure,
+  });
+  const selected = [];
+  let props = { native: { eyes: ['Open'], mouths: [], defaults: { eye: 'Open' } }, live2d: [],
+    supportsLive2D: true, value: '', onValueChange: value => selected.push(value) };
+  let tree = harness.render(props);
+  assert.equal(nodes(tree, 'SearchableCascader').length, 0, 'empty Live2D list defaults to native');
+  props = { ...props, live2d: ['anon/sad01'], value: '3d:Open//' };
+  tree = harness.render(props);
+  assert.equal(nodes(tree, 'SearchableCascader').length, 0, 'saved native expression determines browser');
+  props = { ...props, value: 'anon/sad01' };
+  tree = harness.render(props);
+  assert.equal(nodes(tree, 'SearchableCascader').length, 1);
+  props = { ...props, supportsLive2D: false };
+  tree = harness.render(props);
+  assert.equal(nodes(tree, 'Button').filter(node => ['3D', 'Live2D'].some(label => node.children.includes(label))).length, 0);
+  assert.equal(nodes(tree, 'SearchableCascader').length, 0);
+  nodes(tree, 'Popover')[0].props.onOpenChange(null, { open: true });
+  tree = harness.render(props);
+  nodes(tree, 'Button').find(node => node.children.includes('Open')).props.onClick();
+  tree = harness.render(props);
+  nodes(tree, 'Button').filter(node => node.children.includes('无'))[0].props.onClick();
+  tree = harness.render(props);
+  nodes(tree, 'Button').filter(node => node.children.includes('无'))[1].props.onClick();
+  assert.deepEqual(selected, ['3d:Open//']);
+});
 
 test('model picker reopens at the containing directory and keeps its toolbar while switching roots', async () => {
   const harness = await componentHarness('../src/pages/editor/ChooseFile/ChooseFile.tsx', {
@@ -212,7 +266,7 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
     { type: 'garupa-motion', name: revision === 1 ? 'old' : 'extra/new', config: 'figure/params/config.json' },
     { type: 'motion', name: 'hasunosora/drag', description: revision === 1 ? '被拖走' : '被拉走', config: 'figure/motions/config.json' },
   ];
-  const model = () => ({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressions: [{ name: revision === 1 ? 'Sad' : 'Smile' }] }] });
+  const model = () => ({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: revision === 1 ? 'Sad' : 'Smile' }] }] }] });
   const axios = {
     async get(url) {
       if (url.endsWith('webgal-engine.json')) return { data: { id: gltfFigure.LOVELIVE_ENGINE_ID } };
@@ -245,10 +299,10 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   let selectors = nodes(tree, 'SearchableCascader');
   assert.deepEqual([...selectors[0].props.optionList], ['hasunosora/drag', 'old']);
   assert.equal(selectors[0].props.optionDescriptions.get('hasunosora/drag'), '被拖走');
-  assert.deepEqual([...selectors[1].props.optionList], ['Sad']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Sad']);
   const readsBefore = modelReads;
   selectors[0].props.onOpen();
-  selectors[1].props.onOpen();
+  nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
   assert.equal(posts, 2, 'concurrent dropdown opening reuses one request');
   assert.equal(modelReads, readsBefore, 'unchanged catalog does not reload model config');
@@ -259,19 +313,19 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   selectors = nodes(tree, 'SearchableCascader');
   assert.deepEqual([...selectors[0].props.optionList], ['extra/new', 'hasunosora/drag']);
   assert.equal(selectors[0].props.optionDescriptions.get('hasunosora/drag'), '被拉走');
-  assert.deepEqual([...selectors[1].props.optionList], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
   assert.equal(refreshes, 1);
   revision = 3;
-  nodes(tree, 'SearchableCascader')[1].props.onOpen();
+  nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
-  assert.equal(modelReads, readsBefore + 2, 'new revision reloads model-owned presets even when catalog entries are unchanged');
+  assert.equal(modelReads, readsBefore + 2, 'new revision reloads model-owned states even when catalog entries are unchanged');
   fail = true;
-  selectors[1].props.onOpen();
+  nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
-  assert.deepEqual([...nodes(tree, 'SearchableCascader')[1].props.optionList], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
   fail = false;
   enabled = false;
-  nodes(tree, 'SearchableCascader')[1].props.onOpen();
+  nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
   assert.equal(nodes(tree, 'SearchableCascader').length, 0, 'disabled engine response removes glTF selectors');
   assert.equal(refreshes, 3, 'glTF-enabled to disabled transition refreshes the running preview');
@@ -287,7 +341,7 @@ test('a readable glTF model keeps its animation panel when an adapter config is 
       ] } }; },
       async get(url) {
         if (url.includes('/runtime/')) throw Error('adapter unavailable');
-        return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', motionGroup: 'llas', expressions: [{ name: 'Smile' }] }] } };
+        return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', motionGroup: 'llas', expressionGroups: [{ type: 'eye', states: [{ name: 'Smile' }] }] }] } };
       },
     } },
     '../../../../hooks/useValue': { useValue: value => ({ value, set() {} }) },
@@ -300,10 +354,11 @@ test('a readable glTF model keeps its animation panel when an adapter config is 
   });
   const props = { sentence: { content: 'ch0001/config.json', args: [] }, onSubmit() {} };
   for (let i = 0; i < 5; i++) { harness.render(props); await harness.flush(); }
-  const selectors = nodes(harness.render(props), 'SearchableCascader');
-  assert.equal(selectors.length, 2, 'glTF motion/expression controls must not become static image controls');
+  const tree = harness.render(props);
+  const selectors = nodes(tree, 'SearchableCascader');
+  assert.equal(selectors.length, 1, 'glTF motion controls must not become static image controls');
   assert.deepEqual([...selectors[0].props.optionList], ['llas/idle.motionbin']);
-  assert.deepEqual([...selectors[1].props.optionList], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
 });
 
 test('selecting a model copied after the picker opened refreshes the parameter panel catalog', async () => {
@@ -317,7 +372,7 @@ test('selecting a model copied after the picker opened refreshes the parameter p
         { type: 'model', name: 'new', config: `figure/${modelPath}` },
         { type: 'motion', name: 'llas/idle.motionbin', config: '3d/motion/llas/idle.motionbin' },
       ] } }; },
-      async get() { return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressions: [{ name: 'Smile' }] }] } }; },
+      async get() { return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: 'Smile' }] }] }] } }; },
     } },
     '../../../../hooks/useValue': { useValue: value => ({ value, set(next) { if (value === props.sentence.content) props.sentence.content = next; } }) },
     '../utils/getArgByKey': { getArgByKey: () => '' },
@@ -344,9 +399,9 @@ test('selecting a model copied after the picker opened refreshes the parameter p
   await nodes(tree, 'ChooseFile')[0].props.onChange({ name: modelPath, isDir: true });
   tree = await settle();
   const selectors = nodes(tree, 'SearchableCascader');
-  assert.equal(selectors.length, 2, 'new model must immediately show glTF controls without reopening the picker');
+  assert.equal(selectors.length, 1, 'new model must immediately show glTF motion controls without reopening the picker');
   assert.deepEqual([...selectors[0].props.optionList], ['llas/idle.motionbin']);
-  assert.deepEqual([...selectors[1].props.optionList], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
 });
 
 test('Live2D selectors do not refresh glTF catalogs or reload their model on catalog updates', async () => {

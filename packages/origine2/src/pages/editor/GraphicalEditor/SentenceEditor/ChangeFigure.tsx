@@ -21,8 +21,10 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
-import { gltfFigureOptions, isGltfConfigPath } from "@/utils/gltfFigure";
+import { gltfFigureOptions, isGltfConfigPath, NativeExpressionOptions } from "@/utils/gltfFigure";
+import GltfExpressionPicker from '../components/GltfExpressionPicker';
 import useGltfCatalog from '@/hooks/useGltfCatalog';
+import { preferredFigure3D, rememberFigureMode } from '@/utils/gltfFigure';
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
 type AnimationFlag = "" | "on";
@@ -73,8 +75,10 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [isConfigLive2D, setIsConfigLive2D] = useState(false);
-  const [figurePicker3D, setFigurePicker3D] = useState(isGltfConfigPath(props.sentence.content));
+  const [figurePicker3D, setFigurePicker3D] = useState(() => preferredFigure3D(props.sentence.content));
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
+  const [nativeExpressions, setNativeExpressions] = useState<NativeExpressionOptions>({ eyes: [], mouths: [], defaults: {} });
+  const [expressionOptionsReady, setExpressionOptionsReady] = useState(false);
   const motionDescriptions = useMemo(() => new Map(gltfCatalog.resources
     .filter(entry => entry.type === 'motion' && typeof entry.description === 'string' && entry.description.trim())
     .map(entry => [entry.name, entry.description!])), [gltfCatalog.resources]);
@@ -256,6 +260,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       setIsGltfFormat(false);
       setIsConfigLive2D(false);
       setSupportsLive2DExpressions(false);
+      setNativeExpressions({ eyes: [], mouths: [], defaults: {} });
+      setExpressionOptionsReady(false);
     }
 
     if (!pathRaw || pathRaw === "none") return cleanup;
@@ -280,6 +286,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           setSupportsLive2DExpressions(false);
           setL2dMotionsList(modelOptions.motions);
           setL2dExpressionsList(modelOptions.expressions);
+          setNativeExpressions(modelOptions.nativeExpressions);
           const adapterPaths = [...new Set(gltfCatalog.resources.filter(entry => entry.type === 'garupa-expression-adapter').map(entry => entry.config))];
           const catalogUrl = new URL(`/games/${encodeURIComponent(gameDir)}/game/`, window.location.origin);
           const adapterConfigs = await Promise.all(adapterPaths.map(path => axios.get(new URL(path, catalogUrl).href, requestOptions)
@@ -293,6 +300,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           setSupportsLive2DExpressions(options.supportsLive2DExpressions);
           setL2dMotionsList(options.motions);
           setL2dExpressionsList(options.expressions);
+          setNativeExpressions(options.nativeExpressions);
+          setExpressionOptionsReady(true);
         }).catch(error => { if (!controller.signal.aborted) console.warn('glTF figure could not be read:', error); });
       } else {
         setIsGltfFormat(false);
@@ -724,12 +733,12 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               title={t`选择立绘文件`}
               toolbar={gltfCatalog.enabled && <>
                 <span>{t`切换立绘类型`}</span>
-                <Button onClick={() => setFigurePicker3D(value => !value)}>{figurePicker3D ? '3D' : '2D'}</Button>
+                <Button onClick={() => { rememberFigureMode(!figurePicker3D); setFigurePicker3D(!figurePicker3D); }}>{figurePicker3D ? '3D' : '2D'}</Button>
               </>}
               basePath={figurePicker3D && gltfCatalog.enabled ? ['3d', 'figure'] : ['figure']}
               chooseModelDirectory={figurePicker3D && gltfCatalog.enabled}
               selectedFilePath={figurePicker3D === isGltfConfigPath(figureFile.value) ? figureFile.value : undefined}
-              onOpen={() => { void refreshGltfCatalog(); }}
+              onOpen={() => { setFigurePicker3D(preferredFigure3D(figureFile.value)); void refreshGltfCatalog(); }}
               fileFilter={figurePicker3D && gltfCatalog.enabled ? file => isGltfConfigPath(file.path) : undefined}
               onChange={async (fileDesc) => {
                 const request = ++figureSelectionRequest.current;
@@ -740,6 +749,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
                     const { data } = await axios.post('/api/manageGame/selectGltfModel', { gameName: gameDir, path });
                     if (request !== figureSelectionRequest.current) return;
                     if (data.error) { setFigureSelectionError(data.error); return; }
+                    rememberFigureMode(true);
                     figureFile.set(`${path}/config.json`);
                     void refreshGltfCatalog();
                     submit();
@@ -749,6 +759,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
                   }
                   return;
                 }
+                if (fileDesc) rememberFigureMode(false);
                 figureFile.set(fileDesc?.name ?? "");
                 submit();
               }}
@@ -805,7 +816,14 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           </CommonOptions>
           {!isSpineJsonFormat && (
             <CommonOptions key="25" title={isGltfFormat ? (supportsLive2DExpressions ? '3D/Live2D 表情' : '3D 表情(当前模型不支持 Live2D 表情)') : t`Live2D 表情`}>
-              <SearchableCascader
+              {isGltfFormat ? (expressionOptionsReady ? <GltfExpressionPicker
+                native={nativeExpressions}
+                live2d={l2dExpressionsList}
+                supportsLive2D={supportsLive2DExpressions}
+                value={currentExpression.value}
+                onOpen={() => { void refreshGltfCatalog(); }}
+                onValueChange={newValue => { currentExpression.set(newValue); submit(); }}
+              /> : <span role="status">正在读取表情选项…</span>) : <SearchableCascader
                 optionList={l2dExpressionsList}
                 value={currentExpression.value}
                 onOpen={isGltfFormat ? () => { void refreshGltfCatalog(); } : undefined}
@@ -813,7 +831,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
                   newValue && currentExpression.set(newValue);
                   submit();
                 }}
-              />
+              />}
             </CommonOptions>
           )}
           {isSpineJsonFormat && (
