@@ -4,6 +4,7 @@
   "version": "4.6.4",
   "license": "MPL-2.0",
   "scripts": {
+    "test": "yarn run sync:editor-preview-protocol && node scripts/run-tests.cjs",
     "sync:editor-preview-protocol": "yarn workspace @webgal/editor-preview-protocol build",
     "dev": "yarn run sync:editor-preview-protocol && lingui extract --clean && lingui compile --typescript && vite --host",
     "build": "yarn run sync:editor-preview-protocol && lingui extract --clean && lingui compile --typescript && tsc && vite build --base=./",
