@@ -394,8 +394,15 @@ test('selecting a model copied after the picker opened refreshes the parameter p
   revision = 8;
   const picker = nodes(tree, 'ChooseFile')[0];
   assert.equal(nodes(tree, 'Button').filter(button => button.children.includes('2D')).length, 0, 'type switch belongs inside the picker');
-  nodes(picker.props.toolbar, 'Button').find(button => button.children.includes('2D')).props.onClick();
+  const typeButtons = nodes(picker.props.toolbar, 'Button');
+  assert.deepEqual(typeButtons.map(button => button.children[0]), ['2D', '3D']);
+  assert.equal(typeButtons[0].props['aria-pressed'], true);
+  assert.equal(typeButtons[1].props['aria-pressed'], false);
+  typeButtons[1].props.onClick();
   tree = await settle();
+  const selectedTypeButtons = nodes(nodes(tree, 'ChooseFile')[0].props.toolbar, 'Button');
+  assert.equal(selectedTypeButtons[0].props['aria-pressed'], false);
+  assert.equal(selectedTypeButtons[1].props['aria-pressed'], true);
   await nodes(tree, 'ChooseFile')[0].props.onChange({ name: modelPath, isDir: true });
   tree = await settle();
   const selectors = nodes(tree, 'SearchableCascader');

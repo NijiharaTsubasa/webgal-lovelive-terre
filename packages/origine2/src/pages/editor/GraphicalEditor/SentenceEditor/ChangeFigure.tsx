@@ -733,7 +733,10 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               title={t`选择立绘文件`}
               toolbar={gltfCatalog.enabled && <>
                 <span>{t`切换立绘类型`}</span>
-                <Button onClick={() => { rememberFigureMode(!figurePicker3D); setFigurePicker3D(!figurePicker3D); }}>{figurePicker3D ? '3D' : '2D'}</Button>
+                <Button appearance={!figurePicker3D ? 'primary' : 'secondary'} aria-pressed={!figurePicker3D}
+                  onClick={() => { rememberFigureMode(false); setFigurePicker3D(false); }}>2D</Button>
+                <Button appearance={figurePicker3D ? 'primary' : 'secondary'} aria-pressed={figurePicker3D}
+                  onClick={() => { rememberFigureMode(true); setFigurePicker3D(true); }}>3D</Button>
               </>}
               basePath={figurePicker3D && gltfCatalog.enabled ? ['3d', 'figure'] : ['figure']}
               chooseModelDirectory={figurePicker3D && gltfCatalog.enabled}
