@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import axios from 'axios';
 import useSWR from 'swr';
-import { createModelPreviewLoader, modelAssetMap } from '@/utils/modelAssets';
+import { createModelPreviewLoader, modelAssetMap } from '@/utils/gltf/modelAssets';
 
 export default function useModelAssets(rootPath: string[], currentFullPath: string[]) {
   const game = rootPath[0] === 'games' && rootPath[2] === 'game' ? rootPath[1] : undefined;
@@ -18,6 +18,6 @@ export default function useModelAssets(rootPath: string[], currentFullPath: stri
     return result;
   }, [data, rootPath.join('/'), enabled]);
   const loadPreview = useMemo(() => createModelPreviewLoader(async url => (await axios.get(url)).data), [game, data]);
-  return { models, loadPreview, refreshModels: mutate, revision: 0, indexing: false,
+  return { models, loadPreview, refreshModels: mutate,
     indexError: error ? '无法读取模型目录。' : undefined };
 }

@@ -3,8 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { transform } from 'esbuild';
-import { modelAssetMap, modelPreview, createModelPreviewLoader, scheduleModelPreview } from '../src/utils/modelAssets.ts';
-import { isLoveliveEngine } from '../src/utils/gltfFigure.ts';
+import { modelAssetMap, modelPreview, createModelPreviewLoader, scheduleModelPreview } from '../src/utils/gltf/modelAssets.ts';
 
 const root = ['games', '新的 游戏', 'game'];
 const model = { type: 'model', name: '角色', description: '完整说明\n第二行', config: '3d/figure/分组/%E6%A8%A1%E5%9E%8B%20%25/config.json' };
@@ -54,7 +53,7 @@ test('hover reads after 200ms, cancelled and old requests cannot replace the cur
   assert.equal(reads, 1);
 });
 
-test('bounded preview cache shares requests and a new revision loader fetches updated image', async () => {
+test('bounded preview cache shares requests and a new directory snapshot loader fetches updated image', async () => {
   let reads = 0;
   let value = preview;
   const read = async () => { reads++; return config(value); };
@@ -95,7 +94,7 @@ test('existing Tooltip keeps PNG preview, and model without thumbnail displays f
     '@/utils/checkFileName': { checkFileName: () => true },
     '@/utils/getFileIcon': { extractExtension: ext => ext === 'png' ? 'image' : 'unknown', getFileIcon: () => '', getDirIcon: () => '' },
     '../../hooks/useValue': { useValue: value => ({ value, set() {} }) },
-    '@/utils/modelAssets': { scheduleModelPreview },
+    '@/utils/gltf/modelAssets': { scheduleModelPreview },
     '@fluentui/react-icons': { bundleIcon: () => 'Icon' },
   });
   const props = { rootPath: root, type: 'list', checkHasFile: () => false, file: { name: 'image.png', path: 'figure/image.png', extName: 'png', isDir: false } };
@@ -115,12 +114,9 @@ test('existing Tooltip keeps PNG preview, and model without thumbnail displays f
 
 test('shared Assets hook only browses the current fixed model directory', async () => {
     const keys = [];
-    const hook = await renderModule('../src/hooks/useModelAssets.ts', {
+    const hook = await renderModule('../src/hooks/gltf/useModelAssets.ts', {
       swr: { default: key => { keys.push(key); return { data: key ? { models: [{ name: '角色', path: '分组/模型 %', description: model.description, preview }] } : undefined, mutate() {} }; } },
-      './useGltfCatalog': { default: game => { keys.push(game ?? null); return {
-        catalog: { enabled: true, resources: [model], revision: 4 }, refresh() {},
-      }; } },
-      '@/utils/gltfFigure': { isLoveliveEngine }, '@/utils/modelAssets': { modelAssetMap, createModelPreviewLoader },
+      '@/utils/gltf/modelAssets': { modelAssetMap, createModelPreviewLoader },
     });
     const result = hook(root, [...root, '3d', 'figure']);
     assert.deepEqual([...keys[0]], ['gltf-model-directory', '新的 游戏', '']);

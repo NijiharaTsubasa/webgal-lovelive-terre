@@ -51,14 +51,6 @@ export class AssetsController {
   async readAssets(@Param('readDirPath') readDirPath: string) {
     readDirPath = decodeURI(`public/${readDirPath}`);
     const dirPath = this.webgalFs.getPathFromRoot(`${readDirPath}`);
-    if (
-      readDirPath
-        .replace(/\\/g, '/')
-        .replace(/\/$/, '')
-        .endsWith('/game/figure')
-    ) {
-      await this.webgalFs.refreshGltfCatalogForPath(dirPath, false);
-    }
     const dirInfo = await this.webgalFs.getDirInfo(dirPath);
     return { readDirPath, dirPath, dirInfo };
   }

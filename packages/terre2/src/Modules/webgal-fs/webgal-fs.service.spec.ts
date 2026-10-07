@@ -4,7 +4,8 @@ import { join, resolve } from 'path';
 import AdmZip = require('adm-zip');
 import { WebgalFsService } from './webgal-fs.service';
 import { UserDataService } from '../user-data/user-data.service';
-import { GltfCatalogBackground } from '../manage-game/gltf-catalog-background';
+import { GltfCatalogWorkerClient } from '../gltf/gltf-catalog-worker-client';
+import { GltfResourceIndexService } from '../gltf/gltf-resource-index.service';
 
 // These filesystem tests never invoke the OS recycle bin.
 jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
@@ -17,16 +18,18 @@ describe('WebgalFsService', () => {
     `run-${Date.now()}`,
   );
   let service: WebgalFsService;
+  let index: GltfResourceIndexService;
 
   beforeEach(async () => {
-    service = new WebgalFsService(new ConsoleLogger());
+    index = new GltfResourceIndexService(new ConsoleLogger());
+    service = new WebgalFsService(new ConsoleLogger(), index);
     await fs.mkdir(testRoot, { recursive: true });
     jest.spyOn(UserDataService, 'getGameRoot').mockImplementation(name => name ? join(testRoot, 'games', name) : join(testRoot, 'games'));
     jest.spyOn(UserDataService, 'getEngineTemplateRoot').mockReturnValue(join(testRoot, 'template'));
   });
 
   afterEach(async () => {
-    await service.onModuleDestroy();
+    await index.onModuleDestroy();
     jest.restoreAllMocks();
     await fs.rm(testRoot, { recursive: true, force: true });
   });
@@ -48,21 +51,21 @@ describe('WebgalFsService', () => {
       .spyOn(UserDataService, 'getEngineTemplateRoot')
       .mockReturnValue(join(testRoot, 'template'));
     const config = join(resource, 'idle.mtn');
-    await service.getGltfCatalog('demo');
+    await index.getGltfCatalog('demo');
     await service.updateTextFile(config, '{}');
-    await service.ensureGltfCatalog('demo');
+    await index.ensureGltfCatalog('demo');
     expect(
-      (await service.ensureGltfCatalog('demo')).resources[0].name,
+      (await index.ensureGltfCatalog('demo')).resources[0].name,
     ).toBe('idle');
     await service.renameFile(config, 'not-a-manifest.json');
-    await service.ensureGltfCatalog('demo');
-    expect((await service.ensureGltfCatalog('demo')).resources).toEqual(
+    await index.ensureGltfCatalog('demo');
+    expect((await index.ensureGltfCatalog('demo')).resources).toEqual(
       [],
     );
     await service.updateTextFile(config, '{}');
     await service.deleteFile(config);
-    await service.ensureGltfCatalog('demo');
-    expect((await service.ensureGltfCatalog('demo')).resources).toEqual(
+    await index.ensureGltfCatalog('demo');
+    expect((await index.ensureGltfCatalog('demo')).resources).toEqual(
       [],
     );
   });
@@ -71,8 +74,8 @@ describe('WebgalFsService', () => {
     const games = join(testRoot, 'games');
     jest.spyOn(UserDataService, 'getGameRoot').mockReturnValue(games);
     jest.spyOn(UserDataService, 'getEngineTemplateRoot').mockReturnValue(join(testRoot, 'template'));
-    const start = jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-    await service.refreshGltfCatalogForPath(join(games, 'new-game/game/figure/model/config.json'));
+    const start = jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+    await index.notifyFile(join(games, 'new-game/game/figure/model/config.json'));
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -105,20 +108,20 @@ describe('WebgalFsService', () => {
     jest
       .spyOn(UserDataService, 'getEngineTemplateRoot')
       .mockReturnValue(join(testRoot, 'template'));
-    const start = jest.spyOn(GltfCatalogBackground.prototype, 'start');
+    const start = jest.spyOn(GltfCatalogWorkerClient.prototype, 'start');
     const results = await Promise.all(
-      Array.from({ length: 20 }, () => service.getGltfCatalog('demo')),
+      Array.from({ length: 20 }, () => index.getGltfCatalog('demo')),
     );
     expect(results.every((result) => result.indexing)).toBe(true);
-    expect((service as any).catalogIndexes.size).toBe(1);
+    expect((index as any).catalogIndexes.size).toBe(1);
     expect(start.mock.instances.every(instance => instance === start.mock.instances[0])).toBe(true);
-    expect((await service.ensureGltfCatalog('demo')).resources).toEqual([expect.objectContaining({ name: 'idle' })]);
+    expect((await index.ensureGltfCatalog('demo')).resources).toEqual([expect.objectContaining({ name: 'idle' })]);
   });
 
   it('returns a snapshot without waiting for slow discovery', async () => {
-    jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-    const settle = jest.spyOn(GltfCatalogBackground.prototype, 'settled').mockImplementation(() => new Promise(() => {}));
-    const result = await service.getGltfCatalog('demo');
+    jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+    const settle = jest.spyOn(GltfCatalogWorkerClient.prototype, 'settled').mockImplementation(() => new Promise(() => {}));
+    const result = await index.getGltfCatalog('demo');
     expect(result).toMatchObject({ indexing: true, resources: [] });
     expect(settle).not.toHaveBeenCalled();
   });
@@ -126,50 +129,50 @@ describe('WebgalFsService', () => {
   it('keeps an index until the last editor session leaves and reclaims expired sessions', async () => {
     jest.useFakeTimers();
     try {
-      jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-      const close = jest.spyOn(GltfCatalogBackground.prototype, 'close').mockResolvedValue();
-      await service.gltfCatalogSession('demo', 'tab-a', true);
-      await service.gltfCatalogSession('demo', 'tab-b', true);
-      await service.gltfCatalogSession('demo', 'tab-a', false);
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+      const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
+      await index.gltfCatalogSession('demo', 'tab-a', true);
+      await index.gltfCatalogSession('demo', 'tab-b', true);
+      await index.gltfCatalogSession('demo', 'tab-a', false);
       await jest.advanceTimersByTimeAsync(10000);
       expect(close).not.toHaveBeenCalled();
-      await service.gltfCatalogSession('demo', 'tab-b', false);
+      await index.gltfCatalogSession('demo', 'tab-b', false);
       await jest.advanceTimersByTimeAsync(10000);
       expect(close).toHaveBeenCalledTimes(1);
-      await service.gltfCatalogSession('demo', 'lost-tab', true);
+      await index.gltfCatalogSession('demo', 'lost-tab', true);
       await jest.advanceTimersByTimeAsync(45000);
       expect(close).toHaveBeenCalledTimes(2);
     } finally { jest.useRealTimers(); }
   });
 
   it('suspends an open index throughout copying and restarts it only after the copy ends', async () => {
-    jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-    const close = jest.spyOn(GltfCatalogBackground.prototype, 'close').mockResolvedValue();
+    jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+    const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
     const root = join(testRoot, 'games');
     jest.spyOn(UserDataService, 'getGameRoot').mockReturnValue(root);
-    await service.gltfCatalogSession('demo', 'tab', true);
+    await index.gltfCatalogSession('demo', 'tab', true);
     let finish: () => void;
     const copied = new Promise<void>(resolve => { finish = resolve; });
     const cp = jest.spyOn(fs, 'cp').mockImplementation(() => copied);
     const operation = service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/motion'));
     while (!cp.mock.calls.length) await Promise.resolve();
     expect(close).toHaveBeenCalledTimes(1);
-    expect((service as any).catalogIndexes.size).toBe(0);
-    expect((await service.getGltfCatalog('demo')).indexing).toBe(true);
-    expect((service as any).catalogIndexes.size).toBe(0);
+    expect((index as any).catalogIndexes.size).toBe(0);
+    expect((await index.getGltfCatalog('demo')).indexing).toBe(true);
+    expect((index as any).catalogIndexes.size).toBe(0);
     finish();
     await operation;
-    expect((service as any).catalogIndexes.size).toBe(1);
+    expect((index as any).catalogIndexes.size).toBe(1);
   });
 
   it('does not retire the worker while a long export is waiting for initial discovery', async () => {
     jest.useFakeTimers();
     try {
-      jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-      const close = jest.spyOn(GltfCatalogBackground.prototype, 'close').mockResolvedValue();
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+      const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
       let finish: (value: any) => void;
-      jest.spyOn(GltfCatalogBackground.prototype, 'settled').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-      const exporting = service.ensureGltfCatalog('demo');
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'settled').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+      const exporting = index.ensureGltfCatalog('demo');
       await jest.advanceTimersByTimeAsync(60000);
       expect(close).not.toHaveBeenCalled();
       finish({ enabled: true, resources: [], issues: [], revision: 1, indexing: false });
@@ -179,15 +182,15 @@ describe('WebgalFsService', () => {
     } finally { jest.useRealTimers(); }
   });
   it('does not restart motion discovery when copying model or runtime packages', async () => {
-    jest.spyOn(GltfCatalogBackground.prototype, 'start').mockImplementation(() => {});
-    const close = jest.spyOn(GltfCatalogBackground.prototype, 'close').mockResolvedValue();
+    jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+    const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
     jest.spyOn(fs, 'cp').mockResolvedValue();
-    await service.gltfCatalogSession('demo', 'tab', true);
+    await index.gltfCatalogSession('demo', 'tab', true);
     const root = UserDataService.getGameRoot();
     await service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/figure/new'));
     await service.copy(join(testRoot, 'source'), join(root, 'demo/game/3d/runtime/new'));
     expect(close).not.toHaveBeenCalled();
-    expect((service as any).catalogIndexes.size).toBe(1);
+    expect((index as any).catalogIndexes.size).toBe(1);
   });
 
   it('rejects invalid marks in path segments', () => {

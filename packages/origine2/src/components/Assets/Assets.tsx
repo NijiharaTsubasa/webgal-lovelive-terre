@@ -58,7 +58,7 @@ import Upload from './Upload';
 import naturalCompare from 'natural-compare-lite';
 import useEditorStore from '@/store/useEditorStore';
 import useTrashFailedToast from '@/hooks/useTrashFailedToast';
-import useModelAssets from '@/hooks/useModelAssets';
+import useModelAssets from '@/hooks/gltf/useModelAssets';
 
 export interface IFile {
   extName: string;
@@ -144,7 +144,7 @@ export default function Assets({
 
   const currentPath = useValue([...basePath, ...selectedFilePath.slice(0, -1)]);
   const currentFullPath = useMemo(() => [...rootPath, ...currentPath.value], [rootPath.join('/'), currentPath.value]);
-  const { models, loadPreview, refreshModels, revision: modelRevision, indexing, indexError } = useModelAssets(rootPath, currentFullPath);
+  const { models, loadPreview, refreshModels, indexError } = useModelAssets(rootPath, currentFullPath);
   const lastPath = useValue<string[]>([...basePath, ...selectedFilePath]);
   const isBasePath = currentPath.value.join('/') === basePath.join('/');
   const extNameTypes = fileConfig
@@ -194,10 +194,6 @@ export default function Assets({
   };
 
   const { data: files, error: filesError } = useSWR(currentFullPath.join('/'), assetsFetcher);
-  useEffect(() => {
-    if (modelRevision) void mutate(currentFullPath.join('/'));
-  }, [modelRevision, currentFullPath.join('/')]);
-
   useEffect(() => {
     if (filesError) {
       currentPath.set(basePath);
@@ -399,7 +395,6 @@ export default function Assets({
         });
       }}
     >
-      {indexing && <div role="status" style={{ padding: '4px 8px' }}>正在索引 glTF 资源，预览会自动更新。</div>}
       {indexError && <div role="alert" style={{ padding: '4px 8px' }}>{indexError}</div>}
       <div className={styles.controll}>
         <div

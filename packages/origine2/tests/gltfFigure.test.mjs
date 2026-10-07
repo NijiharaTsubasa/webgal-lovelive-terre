@@ -1,13 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { gltfFigureOptions, gltfFigureSelectionError, isGltfConfigPath, isLoveliveEngine, encodeNativeExpression, decodeNativeExpression } from '../src/utils/gltfFigure.ts';
-
-test('only our engine enables glTF controls', () => {
-  assert.equal(isLoveliveEngine({ id: 'webgal-lovelive.lovelive' }), true);
-  for (const manifest of [null, {}, { id: 'webgal-mygo.mygo' }, { id: 'webgal.webgal' }]) {
-    assert.equal(isLoveliveEngine(manifest), false);
-  }
-});
+import { gltfFigureOptions, isGltfConfigPath, encodeNativeExpression, decodeNativeExpression } from '../src/utils/gltf/gltfFigure.ts';
 
 test('config paths are recognizable without scanning a resource catalog', () => {
   assert.equal(isGltfConfigPath('nested/config.json'), true);
@@ -20,21 +13,6 @@ test('ordinary figure names are not mistaken for config paths', () => {
   }
   assert.equal(isGltfConfigPath('nested/config.json?cache=1'), true);
   assert.equal(isGltfConfigPath('nested/model.json'), false);
-});
-
-test('selection validates only component packages and reports actual resource kinds', () => {
-  for (const value of [null, {}, { model: 'model.moc' }, { animations: {} }]) {
-    assert.equal(gltfFigureSelectionError(value), null);
-  }
-  assert.equal(gltfFigureSelectionError({ components: [{ type: 'shader' }, { type: 'motion' }] }),
-    '所选文件不是有效的glTF 3D模型（当前文件种类:shader、motion）');
-  assert.equal(gltfFigureSelectionError({ components: [{ type: 'model', role: 'head' }] }),
-    '所选文件不是有效的glTF 3D模型（当前文件种类:model（head））');
-  assert.equal(gltfFigureSelectionError({ components: [] }),
-    '所选文件不是有效的glTF 3D模型（当前文件种类:未声明）');
-  const model = { type: 'model', role: 'integrated', model: 'model.glb' };
-  assert.equal(gltfFigureSelectionError({ components: [model, { type: 'shader' }] }), null);
-  assert.equal(gltfFigureSelectionError({ components: [model, model] }), '暂不支持一个配置包含多个glTF 3D模型');
 });
 
 test('only one integrated model can supply model-owned expressions', () => {

@@ -8,14 +8,13 @@ import {
   extname,
   isAbsolute,
   join,
-  relative,
-  sep,
 } from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UserDataService } from '../user-data/user-data.service';
 import trash from 'trash';
-import { GltfCatalogBackground } from '../manage-game/gltf-catalog-background';
+import { GltfResourceIndexService } from '../gltf/gltf-resource-index.service';
+import { checkFileName } from '../../util/checkFileName';
 
 const pExecFile = promisify(execFile);
 
@@ -42,224 +41,10 @@ interface FileList {
 
 @Injectable()
 export class WebgalFsService {
-  constructor(private readonly logger: ConsoleLogger) {}
-
-  private catalogIndexes = new Map<string, GltfCatalogBackground>();
-  private catalogRoot?: string;
-  private catalogOpening?: Promise<GltfCatalogBackground>;
-  private catalogSessions = new Map<string, Map<string, number>>();
-  private catalogPins = new Map<string, number>();
-  private catalogIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  private catalogSuspensions = new Map<string, number>();
-  private catalogSessionTimer?: ReturnType<typeof setInterval>;
-  private catalogEpoch = 0;
-  private catalogEpochs = new Map<string, { index: GltfCatalogBackground; revision: number; value: number }>();
-  private catalogSnapshots = new Map<string, any>();
-
-  async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
-    const root = UserDataService.getGameRoot();
-    if (this.catalogRoot !== undefined && this.catalogRoot !== root) await this.onModuleDestroy();
-    this.catalogRoot = root;
-    let sessions = this.catalogSessions.get(gameName);
-    if (!sessions) {
-      sessions = new Map();
-      this.catalogSessions.set(gameName, sessions);
-    }
-    if (active) {
-      sessions.set(sessionId, Date.now() + 30000);
-      const timer = this.catalogIdleTimers.get(gameName);
-      if (timer) clearTimeout(timer);
-      this.catalogIdleTimers.delete(gameName);
-      if (!this.catalogSessionTimer) {
-        this.catalogSessionTimer = setInterval(() => this.expireCatalogSessions(), 5000);
-        this.catalogSessionTimer.unref();
-      }
-      await this.getCatalogIndex(gameName);
-    } else {
-      sessions.delete(sessionId);
-      this.releaseUnusedCatalog(gameName);
-    }
-    return { ok: true };
-  }
-
-  private expireCatalogSessions() {
-    for (const [gameName, sessions] of this.catalogSessions) {
-      for (const [id, expiry] of sessions) if (expiry <= Date.now()) sessions.delete(id);
-      this.releaseUnusedCatalog(gameName);
-    }
-  }
-
-  private releaseUnusedCatalog(gameName: string) {
-    if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName) || this.catalogIdleTimers.has(gameName)) return;
-    const timer = setTimeout(() => {
-      this.catalogIdleTimers.delete(gameName);
-      if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName)) return;
-      const index = this.catalogIndexes.get(gameName);
-      this.catalogIndexes.delete(gameName);
-      this.catalogSessions.delete(gameName);
-      if (index) {
-        this.catalogSnapshots.set(gameName, this.catalogSnapshot(gameName, index));
-        void index.close().catch(error => this.logger.warn(`glTF 索引关闭失败: ${error.message}`));
-      }
-      if (!this.catalogSessions.size && this.catalogSessionTimer) {
-        clearInterval(this.catalogSessionTimer);
-        this.catalogSessionTimer = undefined;
-      }
-    }, 10000);
-    timer.unref();
-    this.catalogIdleTimers.set(gameName, timer);
-  }
-
-  private catalogSnapshot(gameName: string, index?: GltfCatalogBackground) {
-    if (!index) return { ...(this.catalogSnapshots.get(gameName) ?? { enabled: false, resources: [], issues: [], revision: 0 }), indexing: Boolean(this.catalogSuspensions.get(gameName)) };
-    const snapshot = index.snapshot();
-    const previous = this.catalogSnapshots.get(gameName);
-    let revision = this.catalogEpochs.get(gameName);
-    if (!revision || revision.index !== index || revision.revision !== snapshot.revision) {
-      revision = { index, revision: snapshot.revision, value: ++this.catalogEpoch };
-      this.catalogEpochs.set(gameName, revision);
-    }
-    const result = {
-      ...snapshot,
-      ...(snapshot.indexing && !snapshot.resources.length && previous ? { enabled: previous.enabled, resources: previous.resources, issues: previous.issues } : {}),
-      revision: revision.value,
-    };
-    this.catalogSnapshots.set(gameName, result);
-    return result;
-  }
-
-  private async getCatalogIndex(gameName: string) {
-    if (this.catalogSuspensions.get(gameName)) return undefined;
-    const root = UserDataService.getGameRoot();
-    if (this.catalogOpening) {
-      await this.catalogOpening;
-      return this.getCatalogIndex(gameName);
-    }
-    const existing = this.catalogIndexes.get(gameName);
-    if (this.catalogRoot === root && existing) return existing;
-    const opening = (async () => {
-      if (this.catalogRoot !== undefined && this.catalogRoot !== root) {
-        await this.onModuleDestroy();
-      }
-      this.catalogRoot = root;
-      const index = new GltfCatalogBackground(
-        root,
-        UserDataService.getEngineTemplateRoot(),
-        gameName,
-        (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
-      );
-      this.catalogIndexes.set(gameName, index);
-      index.start();
-      this.releaseUnusedCatalog(gameName);
-      return index;
-    })();
-    this.catalogOpening = opening;
-    try {
-      return await opening;
-    } finally {
-      if (this.catalogOpening === opening) this.catalogOpening = undefined;
-    }
-  }
-
-  async onModuleDestroy() {
-    if (this.catalogSessionTimer) clearInterval(this.catalogSessionTimer);
-    this.catalogSessionTimer = undefined;
-    for (const timer of this.catalogIdleTimers.values()) clearTimeout(timer);
-    this.catalogIdleTimers.clear();
-    await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
-    this.catalogIndexes.clear();
-    this.catalogSessions.clear();
-    this.catalogPins.clear();
-    this.catalogSnapshots.clear();
-    this.catalogEpochs.clear();
-  }
-
-  async getGltfCatalog(gameName: string) {
-    return this.catalogSnapshot(gameName, await this.getCatalogIndex(gameName));
-  }
-
-  updateGltfRuntimes(gameName: string, runtime: Parameters<GltfCatalogBackground['setRuntimes']>[0]) {
-    this.catalogIndexes.get(gameName)?.setRuntimes(runtime);
-  }
-
-  async ensureGltfCatalog(gameName: string) {
-    this.catalogPins.set(gameName, (this.catalogPins.get(gameName) ?? 0) + 1);
-    const timer = this.catalogIdleTimers.get(gameName);
-    if (timer) clearTimeout(timer);
-    this.catalogIdleTimers.delete(gameName);
-    try {
-      const index = await this.getCatalogIndex(gameName);
-      if (!index) throw new Error('正在复制工程资源，请稍后重试导出');
-      return await index.settled();
-    } finally {
-      const count = (this.catalogPins.get(gameName) ?? 1) - 1;
-      if (count) this.catalogPins.set(gameName, count);
-      else this.catalogPins.delete(gameName);
-      this.releaseUnusedCatalog(gameName);
-    }
-  }
-
-  async refreshGltfCatalogForPath(path: string, changed = true) {
-    try {
-      const normalized = this.normalizeFsPath(path);
-      const rel = relative(UserDataService.getGameRoot(), normalized);
-      if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return;
-      const [gameName, ...segments] = rel.split(sep);
-      const inner = segments.join('/');
-      if (
-        !gameName ||
-        !(
-          inner === 'webgal-engine.json' ||
-          inner === 'game/3d/motion' ||
-          inner.startsWith('game/3d/motion/') ||
-          inner === 'game/3d/mtn_exp' ||
-          inner.startsWith('game/3d/mtn_exp/')
-        )
-      )
-        return;
-      if (this.catalogRoot !== UserDataService.getGameRoot()) return;
-      const index = this.catalogIndexes.get(gameName);
-      if (!index) return;
-      if (changed) index.notify(normalized);
-    } catch (error) {
-      this.logger.warn(`glTF 资源清单未更新: ${String(error)}`);
-    }
-  }
-
-  private async withCatalogCopy<T>(target: string, operation: () => Promise<T>): Promise<T> {
-    const path = this.normalizeFsPath(target);
-    const root = UserDataService.getGameRoot();
-    const rel = relative(root, path);
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith(`..${sep}`)) return operation();
-    const inner = rel.split(sep).slice(1).join('/');
-    if (inner && !['game', 'game/3d', 'game/3d/motion', 'game/3d/mtn_exp'].includes(inner) &&
-        !inner.startsWith('game/3d/motion/') && !inner.startsWith('game/3d/mtn_exp/')) return operation();
-    const names = rel ? [rel.split(sep)[0]] : [...new Set([...this.catalogIndexes.keys(), ...this.catalogSessions.keys()])];
-    for (const name of names) this.catalogSuspensions.set(name, (this.catalogSuspensions.get(name) ?? 0) + 1);
-    try {
-      await Promise.all(names.map(async name => {
-        const index = this.catalogIndexes.get(name);
-        if (index) {
-          this.catalogSnapshots.set(name, this.catalogSnapshot(name, index));
-          this.catalogIndexes.delete(name);
-          await index.close();
-        }
-      }));
-      return await operation();
-    } finally {
-      for (const name of names) {
-        const count = (this.catalogSuspensions.get(name) ?? 1) - 1;
-        if (count) this.catalogSuspensions.set(name, count);
-        else {
-          this.catalogSuspensions.delete(name);
-          if (this.catalogSessions.get(name)?.size) await this.getCatalogIndex(name);
-        }
-      }
-    }
-  }
+  constructor(private readonly logger: ConsoleLogger, private readonly gltfIndex: GltfResourceIndexService) {}
 
   static checkFileName(name: string): boolean {
-    return name.search(/[\/\\\:\*\?"\<\>\|]/) === -1;
+    return checkFileName(name);
   }
 
   static hasInvalidPathSegments(
@@ -335,7 +120,7 @@ export class WebgalFsService {
   async copy(src: string, dest: string): Promise<boolean> {
     try {
       this.logger.log(`复制: ${decodeURI(src)} -> ${decodeURI(dest)}`);
-      await this.withCatalogCopy(dest, () => fs.cp(decodeURI(src), decodeURI(dest), { recursive: true }));
+      await this.gltfIndex.withPausedIndex(this.normalizeFsPath(dest), () => fs.cp(decodeURI(src), decodeURI(dest), { recursive: true }));
       return true;
     } catch (error) {
       this.logger.error(
@@ -410,7 +195,7 @@ export class WebgalFsService {
       fs.rename(oldPath, newPath)
         .then(async () => {
           this.logger.log(`重命名文件: ${oldPath} -> ${newPath}`);
-          await this.refreshGltfCatalogForPath(oldPath);
+          await this.gltfIndex.notifyFile(this.normalizeFsPath(oldPath));
           resolve('File renamed!');
         })
         .catch(() => {
@@ -429,7 +214,7 @@ export class WebgalFsService {
       fs.unlink(decodeURI(path))
         .then(async () => {
           this.logger.log(`删除文件: ${decodeURI(path)}`);
-          await this.refreshGltfCatalogForPath(path);
+          await this.gltfIndex.notifyFile(this.normalizeFsPath(path));
           resolve('File Deleted');
         })
         .catch(() => {
@@ -463,7 +248,7 @@ export class WebgalFsService {
         await fs.unlink(path);
         this.logger.log(`删除文件: ${path}`);
       }
-      if (!nested) await this.refreshGltfCatalogForPath(_path);
+      if (!nested) await this.gltfIndex.notifyFile(this.normalizeFsPath(_path));
       return true;
     } catch (error) {
       this.logger.error(`删除失败: ${decodeURI(_path)}, ${String(error)}`);
@@ -489,7 +274,7 @@ export class WebgalFsService {
 
       await fs.rename(path, newPath);
       this.logger.log(`重命名: ${path} -> ${newPath}`);
-      await this.refreshGltfCatalogForPath(path);
+      await this.gltfIndex.notifyFile(this.normalizeFsPath(path));
 
       return true;
     } catch (error) {
@@ -524,7 +309,7 @@ export class WebgalFsService {
       if (trashBinaryPath && (await this.exists(trashBinaryPath))) {
         try {
           await pExecFile(trashBinaryPath, [path]);
-          await this.refreshGltfCatalogForPath(path);
+          await this.gltfIndex.notifyFile(this.normalizeFsPath(path));
           return true;
         } catch (error) {
           // macOS 上二进制可能因执行位丢失或 Gatekeeper 隔离而无法运行, 回退到库实现
@@ -533,7 +318,7 @@ export class WebgalFsService {
       }
 
       await trash(path, { glob: false });
-      await this.refreshGltfCatalogForPath(path);
+      await this.gltfIndex.notifyFile(this.normalizeFsPath(path));
 
       return true;
     } catch (error) {
@@ -606,7 +391,7 @@ export class WebgalFsService {
       fs.writeFile(decodeURI(path), content)
         .then(async () => {
           this.logger.log(`更新文件: ${decodeURI(path)}`);
-          await this.refreshGltfCatalogForPath(path);
+          await this.gltfIndex.notifyFile(this.normalizeFsPath(path));
           resolve('Updated.');
         })
         .catch(() => {
@@ -700,7 +485,7 @@ export class WebgalFsService {
         await fs.writeFile(filePath, file.file);
         this.logger.log(`写入文件: ${filePath}`);
       }
-      await this.refreshGltfCatalogForPath(targetPath);
+      await this.gltfIndex.notifyFile(this.normalizeFsPath(targetPath));
       return true;
     } catch (error) {
       this.logger.error(`写入文件失败: ${String(error)}`);
@@ -733,7 +518,7 @@ export class WebgalFsService {
     const newPath = join(dir, newName);
 
     await fs.copyFile(filePath, newPath);
-    await this.refreshGltfCatalogForPath(newPath);
+    await this.gltfIndex.notifyFile(this.normalizeFsPath(newPath));
     this.logger.log(`复制文件: ${filePath} -> ${newPath}`);
     return newPath;
   }
@@ -826,7 +611,7 @@ export class WebgalFsService {
 
       await fs.mkdir(decodedTargetDir, { recursive: true });
 
-      return await this.withCatalogCopy(decodedTargetDir, () => new Promise<boolean>((resolve) => {
+      return await this.gltfIndex.withPausedIndex(this.normalizeFsPath(decodedTargetDir), () => new Promise<boolean>((resolve) => {
         zip.extractAllToAsync(decodedTargetDir, true, true, (err) => {
           if (err) {
             this.logger.error(`解压缩失败: ${String(err)}`);

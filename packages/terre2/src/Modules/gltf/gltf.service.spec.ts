@@ -1,17 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConsoleLogger } from '@nestjs/common';
-import { ManageGameService } from './manage-game.service';
-import { WebgalFsService } from '../webgal-fs/webgal-fs.service';
+import { GltfService } from './gltf.service';
+import { GltfResourceIndexService } from './gltf-resource-index.service';
 import { UserDataService } from '../user-data/user-data.service';
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import * as discovery from './gltf-resource-catalog';
+import * as discovery from './gltf-runtime-registry';
 
-jest.mock('trash', () => ({ __esModule: true, default: jest.fn() }));
-
-describe('ManageGameService', () => {
-  let service: ManageGameService;
+describe('GltfService', () => {
+  let service: GltfService;
   const catalog = {
     enabled: true,
     resources: [{ type: 'motion', name: 'idle' }],
@@ -19,7 +16,7 @@ describe('ManageGameService', () => {
     revision: 4,
     indexing: false,
   };
-  const filesystem = {
+  const index = {
     getGltfCatalog: jest.fn(),
     gltfCatalogSession: jest.fn(),
     updateGltfRuntimes: jest.fn(),
@@ -27,24 +24,20 @@ describe('ManageGameService', () => {
   let root: string;
 
   beforeEach(async () => {
-    filesystem.getGltfCatalog.mockReset().mockResolvedValue(catalog);
-    filesystem.gltfCatalogSession.mockReset().mockResolvedValue({ ok: true });
-    filesystem.updateGltfRuntimes.mockReset();
+    index.getGltfCatalog.mockReset().mockResolvedValue(catalog);
+    index.gltfCatalogSession.mockReset().mockResolvedValue({ ok: true });
+    index.updateGltfRuntimes.mockReset();
     root = await fs.mkdtemp(join(tmpdir(), 'terre-model-select-'));
     jest.spyOn(UserDataService, 'getGameRoot').mockReturnValue(root);
     jest.spyOn(UserDataService, 'getEngineTemplateRoot').mockReturnValue(root);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        ManageGameService,
-        {
-          provide: ConsoleLogger,
-          useValue: { log: jest.fn(), error: jest.fn() },
-        },
-        { provide: WebgalFsService, useValue: filesystem },
+        GltfService,
+        { provide: GltfResourceIndexService, useValue: index },
       ],
     }).compile();
 
-    service = module.get<ManageGameService>(ManageGameService);
+    service = module.get<GltfService>(GltfService);
   });
   afterEach(async () => {
     jest.restoreAllMocks();
@@ -109,14 +102,14 @@ describe('ManageGameService', () => {
     expect(await service.gltfCatalogSession('demo', 'tab', false)).toEqual({
       ok: true,
     });
-    expect(filesystem.gltfCatalogSession).toHaveBeenCalledWith(
+    expect(index.gltfCatalogSession).toHaveBeenCalledWith(
       'demo',
       'tab',
       false,
     );
   });
   it('rescans once for a newly copied shader package and updates the worker without another scan', async () => {
-    await model([{ name: 'unused.optional', optional: true }]);
+    await model([{ name: 'unused.optional', required: false }]);
     await put('game/3d/runtime/index.json', { packages: [] });
     await put('game/3d/runtime/new/config.json', {
       components: [{ type: 'shader', name: 'Eye' }],
@@ -127,7 +120,7 @@ describe('ManageGameService', () => {
       path: 'a',
     });
     expect(scan).toHaveBeenCalledTimes(1);
-    expect(filesystem.updateGltfRuntimes).toHaveBeenCalledTimes(1);
+    expect(index.updateGltfRuntimes).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(
         await fs.readFile(
@@ -146,6 +139,10 @@ describe('ManageGameService', () => {
       'behavior:required.face, shader:Eye',
     );
     expect(scan).toHaveBeenCalledTimes(1);
+  });
+  it('requires behavior dependencies unless required is explicitly false', async () => {
+    await model([{ name: 'required.face', required: true }, { name: 'unused.face', required: false }]);
+    await expect(service.selectGltfModel('demo', 'a')).rejects.toThrow('behavior:required.face, shader:Eye');
   });
   it('allows a model without a matching parameter expression adapter', async () => {
     await model();

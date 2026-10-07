@@ -38,29 +38,8 @@ export interface GltfCatalogResult {
   error?: string;
 }
 
-export const LOVELIVE_ENGINE_ID = 'webgal-lovelive.lovelive';
-
-export function isLoveliveEngine(manifest: unknown): boolean {
-  return !!manifest && typeof manifest === 'object' &&
-    (manifest as { id?: unknown }).id === LOVELIVE_ENGINE_ID;
-}
-
 export function isGltfConfigPath(path: string): boolean {
   return /(?:^|\/)config\.json$/i.test(path.split(/[?#]/)[0].replace(/\\/g, '/'));
-}
-
-export function gltfFigureSelectionError(config: unknown): string | null {
-  if (!config || typeof config !== 'object' || !('components' in config)) return null;
-  const components = Array.isArray(config.components) ? config.components : [];
-  const models = components.filter(component => component?.type === 'model' && component.role === 'integrated');
-  if (models.length > 1) return '暂不支持一个配置包含多个glTF 3D模型';
-  if (models.length === 1) return null;
-  const types = [...new Set(components.map(component => {
-    if (typeof component?.type !== 'string') return '未声明';
-    return component.type === 'model' && typeof component.role === 'string'
-      ? `${component.type}（${component.role}）` : component.type;
-  }))].join('、') || '未声明';
-  return `所选文件不是有效的glTF 3D模型（当前文件种类:${types}）`;
 }
 
 export function gltfFigureOptions(config: unknown, resources: GltfResourceEntry[], adapterConfigs: unknown[] = []) {

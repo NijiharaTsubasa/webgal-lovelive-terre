@@ -1,4 +1,4 @@
-import { BadRequestException, ConsoleLogger, Injectable } from '@nestjs/common';
+import { ConsoleLogger, Injectable } from '@nestjs/common';
 import { _open } from '../../util/open';
 import { IFileInfo, WebgalFsService } from '../webgal-fs/webgal-fs.service';
 import * as process from 'process';
@@ -13,93 +13,17 @@ import {
 import { TemplateConfigDto } from '../manage-template/manage-template.dto';
 import { promisify } from 'util';
 import { execFile } from 'child_process';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { UserDataService } from '../user-data/user-data.service';
-import { browseGltfModels, readGltfModel, scanGltfRuntimes, gltfEnabled, inside, modelShaderNames } from './gltf-resource-catalog';
-import * as fs from 'fs/promises';
+import { GltfResourceIndexService } from '../gltf/gltf-resource-index.service';
 
 @Injectable()
 export class ManageGameService {
   constructor(
     private readonly logger: ConsoleLogger,
     private readonly webgalFs: WebgalFsService,
+    private readonly gltfIndex: GltfResourceIndexService,
   ) {}
-
-  async updateGltfResourceCatalog(gameName: string, revision?: number) {
-    if (
-      typeof gameName !== 'string' ||
-      !WebgalFsService.checkFileName(gameName) ||
-      !gameName ||
-      gameName === '.' ||
-      gameName === '..'
-    ) {
-      throw new BadRequestException('Invalid game name');
-    }
-    const result = await this.webgalFs.getGltfCatalog(gameName);
-    if (revision === result.revision) {
-      const { resources, issues, ...status } = result;
-      return { ...status, unchanged: true };
-    }
-    return result;
-  }
-
-  async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
-    if (typeof gameName !== 'string' || !gameName || !WebgalFsService.checkFileName(gameName) || gameName === '.' || gameName === '..' ||
-        typeof sessionId !== 'string' || !sessionId.length || sessionId.length > 128 || typeof active !== 'boolean') {
-      throw new BadRequestException('Invalid catalog session');
-    }
-    return this.webgalFs.gltfCatalogSession(gameName, sessionId, active);
-  }
-
-  private gltfGameRoot(gameName: string) {
-    if (typeof gameName !== 'string' || !gameName || !WebgalFsService.checkFileName(gameName) || ['.', '..'].includes(gameName))
-      throw new BadRequestException('Invalid game name');
-    return join(UserDataService.getGameRoot(), gameName);
-  }
-
-  async browseGltfModels(gameName: string, directory: string) {
-    const root = this.gltfGameRoot(gameName);
-    if (typeof directory !== 'string') throw new BadRequestException('Invalid model directory');
-    if (!await gltfEnabled(root, UserDataService.getEngineTemplateRoot())) return { enabled: false, models: [], issues: [] };
-    try { return { enabled: true, ...await browseGltfModels(root, directory) }; }
-    catch (error) { throw new BadRequestException(error.message); }
-  }
-
-  async selectGltfModel(gameName: string, path: string) {
-    const root = this.gltfGameRoot(gameName);
-    if (typeof path !== 'string') throw new BadRequestException('Invalid model path');
-    if (!await gltfEnabled(root, UserDataService.getEngineTemplateRoot())) throw new BadRequestException('当前引擎不支持 glTF 3D模型');
-    try {
-      const model = await readGltfModel(root, path);
-      const required = (Array.isArray(model.behaviors) ? model.behaviors : []).filter(item => !item?.optional).map(item => item?.name).filter(name => typeof name === 'string')
-        .map(name => `behavior:${name}`);
-      required.push(...(await modelShaderNames(root, model)).map(name => `shader:${name}`));
-      const runtimeRoot = join(root, 'game/3d/runtime');
-      const names = new Set<string>();
-      try {
-        const index = JSON.parse(await fs.readFile(join(runtimeRoot, 'index.json'), 'utf8'));
-        for (const config of index.packages ?? []) {
-          const file = resolve(runtimeRoot, ...config.split('/').map(decodeURIComponent));
-          if (!inside(runtimeRoot, file) || !inside(runtimeRoot, await fs.realpath(file))) throw new Error('运行时包路径超出 3d/runtime');
-          const manifest = JSON.parse(await fs.readFile(file, 'utf8'));
-          for (const component of manifest.components ?? [])
-            if (component?.type === 'behavior') names.add(`behavior:${component.namespace}.${component.name}`);
-            else if (component?.type === 'shader') names.add(`shader:${component.name}`);
-            else if (component?.type === 'garupa-expression-adapter' && component.motionGroup === model.motionGroup) names.add('adapter');
-        }
-      } catch {}
-      let missing = required.filter(name => !names.has(name));
-      if (missing.length || (model.motionGroup && !names.has('adapter'))) {
-        const runtime = await scanGltfRuntimes(root);
-        this.webgalFs.updateGltfRuntimes(gameName, runtime);
-        const known = new Set(runtime.resources.map(item => `${item.type}:${item.name}`));
-        missing = required.filter(name => !known.has(name));
-        if (runtime.issues.length) throw new Error(runtime.issues.join('\n'));
-      }
-      if (missing.length) throw new Error(`缺少模型依赖: ${missing.join(', ')}`);
-      return model;
-    } catch (error) { throw new BadRequestException(error.message); }
-  }
 
   /**
    * 获取游戏列表
@@ -406,7 +330,7 @@ export class ManageGameService {
     ejectPlatform: 'web' | 'electron-windows' | 'android',
   ): Promise<boolean> {
     try {
-      await this.webgalFs.ensureGltfCatalog(gameName);
+      await this.gltfIndex.ensureGltfCatalog(gameName);
       // 检查是否使用了衍生版本
       const gameRootDir = `/public/games/${gameName}/`;
       const checkIsEngineTemplateExist = async () => {

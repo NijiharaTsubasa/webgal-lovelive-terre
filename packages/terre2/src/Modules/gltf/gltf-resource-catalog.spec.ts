@@ -1,13 +1,10 @@
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import {
-  browseGltfModels,
-  generateGltfResourceCatalog,
-  readGltfModel,
-  scanGltfRuntimes,
-  CatalogInventory,
-} from './gltf-resource-catalog';
+import { browseGltfModels, readGltfModel } from './gltf-model-packages';
+import { readGltfMotionCatalog } from './gltf-motion-catalog';
+import { scanGltfRuntimes } from './gltf-runtime-registry';
+import type { CatalogInventory } from './gltf-resource-types';
 
 describe('fixed glTF resource directories', () => {
   let root: string;
@@ -73,7 +70,7 @@ describe('fixed glTF resource directories', () => {
     });
     const dirs = jest.spyOn(fs, 'readdir'),
       reads = jest.spyOn(fs, 'readFile');
-    const result = await generateGltfResourceCatalog(root);
+    const result = await readGltfMotionCatalog(root);
     expect(result.resources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -121,7 +118,7 @@ describe('fixed glTF resource directories', () => {
       });
     const inventory: CatalogInventory = { files: new Set() };
     expect(
-      (await generateGltfResourceCatalog(root, false, undefined, inventory))
+      (await readGltfMotionCatalog(root, undefined, inventory))
         .resources,
     ).toHaveLength(5);
     const index = JSON.parse(
@@ -129,7 +126,7 @@ describe('fixed glTF resource directories', () => {
     );
     expect(index.packages).toHaveLength(5);
     const reads = jest.spyOn(fs, 'readdir');
-    await generateGltfResourceCatalog(root, false, undefined, inventory);
+    await readGltfMotionCatalog(root, undefined, inventory);
     expect(reads).not.toHaveBeenCalled();
   });
   it('browses only current model directory and validates selected packages', async () => {

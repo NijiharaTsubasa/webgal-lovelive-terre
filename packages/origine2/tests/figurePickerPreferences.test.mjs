@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { preferredExpressionMode, preferredFigure3D, rememberExpressionMode, rememberFigureMode } from '../src/utils/gltfFigure.ts';
+import { preferredExpressionMode, preferredFigure3D, rememberExpressionMode, rememberFigureMode } from '../src/utils/gltf/gltfFigure.ts';
 
 test('picker preferences are used only for empty values; capability fallback does not change memory', () => {
   assert.equal(preferredFigure3D(''), false);

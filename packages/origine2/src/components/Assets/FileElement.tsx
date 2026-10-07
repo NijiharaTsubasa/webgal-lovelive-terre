@@ -21,7 +21,7 @@ import {
 } from '@fluentui/react-icons';
 import { t } from '@lingui/macro';
 import { useEffect, useRef, useState } from 'react';
-import { ModelAssetInfo, scheduleModelPreview } from '@/utils/modelAssets';
+import { ModelAssetInfo, scheduleModelPreview } from '@/utils/gltf/modelAssets';
 import { useValue } from '../../hooks/useValue';
 import IconWrapper from '../iconWrapper/IconWrapper';
 import { IFile, IViewType } from './Assets';

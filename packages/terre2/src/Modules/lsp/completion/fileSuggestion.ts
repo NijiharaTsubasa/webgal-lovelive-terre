@@ -3,6 +3,7 @@ import { ISentence } from 'webgal-parser/build/types/interface/sceneInterface';
 import { commandType } from './commandArgs';
 import { IFileInfo, WebgalFsService } from '../../webgal-fs/webgal-fs.service';
 import { ConsoleLogger } from '@nestjs/common';
+import { GltfResourceIndexService } from '../../gltf/gltf-resource-index.service';
 
 function setKind(item: CompletionItem, isDir: boolean) {
   return {
@@ -23,7 +24,7 @@ export function makeFileSuggestion(files: IFileInfo[]): CompletionItem[] {
   );
 }
 
-const fsService = new WebgalFsService(new ConsoleLogger());
+const fsService = new WebgalFsService(new ConsoleLogger(), new GltfResourceIndexService(new ConsoleLogger()));
 
 function getPathFromSubdir(basePath: string, subdir: string, content: string) {
   const path = `public/${basePath}/${subdir}/${content}`;

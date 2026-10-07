@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Button, Popover, PopoverSurface, PopoverTrigger } from '@fluentui/react-components';
-import SearchableCascader from './SearchableCascader';
-import { decodeNativeExpression, encodeNativeExpression, NativeExpressionOptions, NativeExpressionSelection } from '@/utils/gltfFigure';
+import SearchableCascader from '@/pages/editor/GraphicalEditor/components/SearchableCascader';
+import { decodeNativeExpression, encodeNativeExpression, NativeExpressionOptions, NativeExpressionSelection } from '@/utils/gltf/gltfFigure';
 import styles from './gltfExpressionPicker.module.scss';
-import { preferredExpressionMode, rememberExpressionMode } from '@/utils/gltfFigure';
+import { preferredExpressionMode, rememberExpressionMode } from '@/utils/gltf/gltfFigure';
 
 interface Props {
   native: NativeExpressionOptions;

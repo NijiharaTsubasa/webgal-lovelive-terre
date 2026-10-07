@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdir, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -15,7 +16,7 @@ const bundle = await build({
     import React, {useState} from 'react';
     import {createRoot} from 'react-dom/client';
     import {FluentProvider, webLightTheme} from '@fluentui/react-components';
-    import Picker from './src/pages/editor/GraphicalEditor/components/GltfExpressionPicker';
+    import Picker from './src/components/gltf/GltfExpressionPicker';
     const base = {native:{eyes:['Sad/左','Open'],mouths:['Smile','A'],defaults:{eye:'Open',closed:'Smile',open:'A'}},
       supportsLive2D:true,live2d:['anon/sad01'],value:''};
     window.selected=[];
@@ -36,7 +37,10 @@ const bundle = await build({
     builder.onLoad({ filter: /.*/, namespace: 'fixture' }, args => ({ loader: 'js', contents: args.path === 'store'
       ? `export default {use:new Proxy({}, {get:(_,key)=>()=>key==='cascaderDelimiters'?['/']:key==='isCascaderDelimitersCustomizable'?false:()=>{}})};`
       : `export const t=(strings,...values)=>strings.reduce((text,part,index)=>text+part+(values[index]??''),'');` }));
-    builder.onResolve({ filter: /^@\// }, args => ({ path: resolve(root, 'src', args.path.slice(2) + '.ts') }));
+    builder.onResolve({ filter: /^@\// }, args => {
+      const path = resolve(root, 'src', args.path.slice(2));
+      return { path: ['.ts', '.tsx'].map(extension => path + extension).find(existsSync) ?? path };
+    });
     builder.onLoad({ filter: /\.scss$/ }, async args => {
       let css = sass.compileString(await readFile(args.path, 'utf8')).css;
       const prefix = basename(args.path).replace(/\W/g, '_');

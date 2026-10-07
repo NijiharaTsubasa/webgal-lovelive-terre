@@ -11,16 +11,16 @@ import {
   sep,
 } from 'path';
 import {
-  CatalogInventory,
-  generateGltfResourceCatalog,
+  readGltfMotionCatalog,
   invalidateCatalogFile,
-} from './gltf-resource-catalog';
+} from './gltf-motion-catalog';
+import type { CatalogInventory } from './gltf-resource-types';
 
 interface GameIndex {
   inventory: CatalogInventory;
   dirty: boolean;
   revision: number;
-  result?: Awaited<ReturnType<typeof generateGltfResourceCatalog>>;
+  result?: Awaited<ReturnType<typeof readGltfMotionCatalog>>;
   error?: Error;
   operation?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
@@ -32,7 +32,7 @@ interface WatchRecovery {
   attempts: number;
   timer?: ReturnType<typeof setTimeout>;
   operation?: Promise<void>;
-  previous: Awaited<ReturnType<typeof generateGltfResourceCatalog>>['resources'];
+  previous: Awaited<ReturnType<typeof readGltfMotionCatalog>>['resources'];
 }
 
 /** Owns filesystem discovery; catalog readers never walk the figure tree. */
@@ -384,9 +384,8 @@ export class GltfCatalogIndex {
       while (state.dirty && !this.closed) {
         state.dirty = false;
         try {
-          const result = await generateGltfResourceCatalog(
+          const result = await readGltfMotionCatalog(
             join(this.root, game),
-            false,
             this.engineRoot,
             state.inventory,
           );

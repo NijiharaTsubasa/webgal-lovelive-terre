@@ -21,10 +21,10 @@ import { OptionCategory } from "../components/OptionCategory";
 import { AssetPreview } from "../components/AssetPreview";
 import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
-import { gltfFigureOptions, isGltfConfigPath, NativeExpressionOptions } from "@/utils/gltfFigure";
-import GltfExpressionPicker from '../components/GltfExpressionPicker';
-import useGltfCatalog from '@/hooks/useGltfCatalog';
-import { preferredFigure3D, rememberFigureMode } from '@/utils/gltfFigure';
+import { gltfFigureOptions, isGltfConfigPath, NativeExpressionOptions } from "@/utils/gltf/gltfFigure";
+import GltfExpressionPicker from '@/components/gltf/GltfExpressionPicker';
+import useGltfCatalog from '@/hooks/gltf/useGltfCatalog';
+import { preferredFigure3D, rememberFigureMode } from '@/utils/gltf/gltfFigure';
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
 type AnimationFlag = "" | "on";

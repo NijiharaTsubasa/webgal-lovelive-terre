@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import axios from 'axios';
 import useSWR from 'swr';
 import { v4 as uuidv4 } from 'uuid';
-import { GltfCatalogResult } from '@/utils/gltfFigure';
+import { GltfCatalogResult } from '@/utils/gltf/gltfFigure';
 import { eventBus } from '@/utils/eventBus';
 
 const EMPTY_CATALOG: GltfCatalogResult = { enabled: false, resources: [], revision: 0 };

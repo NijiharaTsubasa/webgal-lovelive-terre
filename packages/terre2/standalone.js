@@ -9,7 +9,7 @@ const isIntlEnabled = args.includes('--intl');
 module.exports = {
   entry: {
     main: './src/main',
-    'gltf-catalog-worker': './src/Modules/manage-game/gltf-catalog-worker',
+    'gltf-catalog-worker': './src/Modules/gltf/gltf-catalog-worker',
   },
   target: 'node',
   // 置为空即可忽略webpack-node-externals插件

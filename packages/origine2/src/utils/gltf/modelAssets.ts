@@ -37,7 +37,7 @@ export function modelPreview(config: unknown, name: string): string | undefined 
   return typeof preview === 'string' && /^data:image\/webp;base64,[A-Za-z0-9+/]+={0,2}$/.test(preview) ? preview : undefined;
 }
 
-/** A bounded cache owned by one catalog revision; requests retain no full config. */
+/** A bounded cache owned by one directory snapshot; requests retain no full config. */
 export function createModelPreviewLoader(read: (url: string) => Promise<unknown>, limit = 12) {
   const cache = new Map<string, Promise<string | undefined>>();
   return (model: ModelAssetInfo) => {

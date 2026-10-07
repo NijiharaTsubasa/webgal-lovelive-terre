@@ -2,7 +2,7 @@ import { Worker } from 'worker_threads';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { createRequire } from 'module';
-import { GltfCatalogEntry } from './gltf-resource-catalog';
+import { GltfCatalogEntry } from './gltf-resource-types';
 
 export interface GltfCatalogSnapshot {
   enabled: boolean;
@@ -14,7 +14,7 @@ export interface GltfCatalogSnapshot {
 }
 
 /** A project-local worker owns scanning, parsing and filesystem observation. */
-export class GltfCatalogBackground {
+export class GltfCatalogWorkerClient {
   private worker?: Worker;
   private started = false;
   private closed = false;

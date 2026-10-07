@@ -5,7 +5,7 @@ import { GameEditorContext, createGameEditorStore } from "@/store/useGameEditorS
 import { Spinner } from "@fluentui/react-components";
 import { ReactNode, useRef } from "react";
 import useSWR from "swr";
-import { useGltfCatalogSession } from '@/hooks/useGltfCatalog';
+import { useGltfCatalogSession } from '@/hooks/gltf/useGltfCatalog';
 
 const GameEditorProvider = ({ children }: { children: ReactNode }) => {
   const page = useEditorStore.use.page();

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { transform } from 'esbuild';
-import * as gltfFigure from '../src/utils/gltfFigure.ts';
+import * as gltfFigure from '../src/utils/gltf/gltfFigure.ts';
 
 async function componentHarness(file, modules = {}) {
   const hooks = [];
@@ -39,7 +39,7 @@ async function componentHarness(file, modules = {}) {
   const { code } = await transform(await readFile(new URL(file, import.meta.url), 'utf8'), {
     loader: 'tsx', format: 'cjs', jsx: 'transform', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment',
   });
-  const { code: catalogCode } = await transform(await readFile(new URL('../src/hooks/useGltfCatalog.ts', import.meta.url), 'utf8'), {
+  const { code: catalogCode } = await transform(await readFile(new URL('../src/hooks/gltf/useGltfCatalog.ts', import.meta.url), 'utf8'), {
     loader: 'ts', format: 'cjs',
   });
   const cache = new Map();
@@ -57,7 +57,7 @@ async function componentHarness(file, modules = {}) {
       React.useEffect(() => { if (key && !record.data) void record.mutate().catch(() => {}); }, [id]);
       return record;
     } };
-    if (name === '@/hooks/useGltfCatalog') {
+    if (name === '@/hooks/gltf/useGltfCatalog') {
       if (!catalogHook) {
         const exports = { exports: {} };
         vm.runInNewContext(catalogCode, { module: exports, exports: exports.exports, require: requireModule, AbortController, console });
@@ -99,8 +99,8 @@ function nodes(tree, type) {
 const store = { use: new Proxy({}, { get: (_, key) => () => key === 'subPage' ? 'test-game' : key === 'cascaderDelimiters' ? ['/'] : () => {} }) };
 
 test('native expression picker submits only a complete combination and does not enumerate combinations', async () => {
-  const harness = await componentHarness('../src/pages/editor/GraphicalEditor/components/GltfExpressionPicker.tsx', {
-    '@/utils/gltfFigure': gltfFigure,
+  const harness = await componentHarness('../src/components/gltf/GltfExpressionPicker.tsx', {
+    '@/utils/gltf/gltfFigure': gltfFigure,
   });
   const selected = [];
   const props = { native: { eyes: ['Sad/左', 'Open'], mouths: ['Smile', 'A'], defaults: { eye: 'Open', closed: 'Smile', open: 'A' } },
@@ -124,8 +124,8 @@ test('native expression picker submits only a complete combination and does not 
 });
 
 test('native expression picker handles capability, empty lists, saved choice and absent domains', async () => {
-  const harness = await componentHarness('../src/pages/editor/GraphicalEditor/components/GltfExpressionPicker.tsx', {
-    '@/utils/gltfFigure': gltfFigure,
+  const harness = await componentHarness('../src/components/gltf/GltfExpressionPicker.tsx', {
+    '@/utils/gltf/gltfFigure': gltfFigure,
   });
   const selected = [];
   let props = { native: { eyes: ['Open'], mouths: [], defaults: { eye: 'Open' } }, live2d: [],
@@ -269,7 +269,7 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   const model = () => ({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: revision === 1 ? 'Sad' : 'Smile' }] }] }] });
   const axios = {
     async get(url) {
-      if (url.endsWith('webgal-engine.json')) return { data: { id: gltfFigure.LOVELIVE_ENGINE_ID } };
+      if (url.endsWith('webgal-engine.json')) return { data: { id: 'webgal-lovelive.lovelive' } };
       modelReads++;
       return { data: model() };
     },
@@ -286,7 +286,7 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
     '../../ChooseFile/chooseFileConfig': { extNameMap: new Map() },
     '@/hooks/useEaseTypeOptions': { useEaseTypeOptions: () => new Map() },
     '@/hooks/useGlobalEffectEditor': { useGlobalEffectEditor: () => () => {} },
-    '@/utils/gltfFigure': gltfFigure,
+    '@/utils/gltf/gltfFigure': gltfFigure,
     '@/utils/eventBus': { eventBus: { emit() { refreshes++; } } },
   });
   const props = { sentence: { content: modelPath, args: [] }, onSubmit() {} };
@@ -349,7 +349,7 @@ test('a readable glTF model keeps its animation panel when an adapter config is 
     '../../ChooseFile/chooseFileConfig': { extNameMap: new Map() },
     '@/hooks/useEaseTypeOptions': { useEaseTypeOptions: () => new Map() },
     '@/hooks/useGlobalEffectEditor': { useGlobalEffectEditor: () => () => {} },
-    '@/utils/gltfFigure': gltfFigure,
+    '@/utils/gltf/gltfFigure': gltfFigure,
     '@/utils/eventBus': { eventBus: { emit() {} } },
   });
   const props = { sentence: { content: 'ch0001/config.json', args: [] }, onSubmit() {} };
@@ -380,7 +380,7 @@ test('selecting a model copied after the picker opened refreshes the parameter p
     '@/hooks/useEaseTypeOptions': { useEaseTypeOptions: () => new Map() },
     '@/hooks/useGlobalEffectEditor': { useGlobalEffectEditor: () => () => {} },
     '@/utils/combineSubmitString': { combineSubmitString: () => '' },
-    '@/utils/gltfFigure': gltfFigure,
+    '@/utils/gltf/gltfFigure': gltfFigure,
     '@/utils/eventBus': { eventBus: { emit() {} } },
   });
   async function settle() {
@@ -412,7 +412,7 @@ test('Live2D selectors do not refresh glTF catalogs or reload their model on cat
     '@/store/useEditorStore': { default: store },
     axios: { default: {
       async get(url) {
-        if (url.endsWith('webgal-engine.json')) return { data: { id: gltfFigure.LOVELIVE_ENGINE_ID } };
+        if (url.endsWith('webgal-engine.json')) return { data: { id: 'webgal-lovelive.lovelive' } };
         modelReads++;
         return { data: { motions: { idle: [] }, expressions: [{ name: 'Sad' }] } };
       },
@@ -423,7 +423,7 @@ test('Live2D selectors do not refresh glTF catalogs or reload their model on cat
     '../../ChooseFile/chooseFileConfig': { extNameMap: new Map() },
     '@/hooks/useEaseTypeOptions': { useEaseTypeOptions: () => new Map() },
     '@/hooks/useGlobalEffectEditor': { useGlobalEffectEditor: () => () => {} },
-    '@/utils/gltfFigure': gltfFigure, '@/utils/eventBus': { eventBus: { emit() { refreshes++; } } },
+    '@/utils/gltf/gltfFigure': gltfFigure, '@/utils/eventBus': { eventBus: { emit() { refreshes++; } } },
   });
   const props = { sentence: { content: 'anon/model.json', args: [] }, onSubmit() {} };
   let tree;
@@ -444,7 +444,7 @@ test('Live2D selectors do not refresh glTF catalogs or reload their model on cat
 });
 
 test('shared catalog conditionally retains resources and issues, clears recovered errors, and merges simultaneous requests', async () => {
-  const { code } = await transform(await readFile(new URL('../src/hooks/useGltfCatalog.ts', import.meta.url), 'utf8'), {
+  const { code } = await transform(await readFile(new URL('../src/hooks/gltf/useGltfCatalog.ts', import.meta.url), 'utf8'), {
     loader: 'ts', format: 'cjs',
   });
   let reply = { enabled: true, revision: 1, resources: [{ type: 'motion', name: 'idle', config: 'motion.json' }],
@@ -484,7 +484,7 @@ test('shared catalog conditionally retains resources and issues, clears recovere
 });
 
 test('project session renews its lease and releases it on tab hide or component cleanup', async () => {
-  const { code } = await transform(await readFile(new URL('../src/hooks/useGltfCatalog.ts', import.meta.url), 'utf8'), {
+  const { code } = await transform(await readFile(new URL('../src/hooks/gltf/useGltfCatalog.ts', import.meta.url), 'utf8'), {
     loader: 'ts', format: 'cjs',
   });
   const effects = [], calls = [], releases = [];

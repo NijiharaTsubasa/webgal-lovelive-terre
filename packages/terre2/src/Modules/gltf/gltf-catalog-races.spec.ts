@@ -1,11 +1,8 @@
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import {
-  CatalogInventory,
-  generateGltfResourceCatalog,
-  invalidateCatalogFile,
-} from './gltf-resource-catalog';
+import type { CatalogInventory } from './gltf-resource-types';
+import { readGltfMotionCatalog, invalidateCatalogFile } from './gltf-motion-catalog';
 
 describe('motion metadata indexing races', () => {
   let root: string;
@@ -61,9 +58,8 @@ describe('motion metadata indexing races', () => {
       }
       return handle;
     }) as any);
-    const reading = generateGltfResourceCatalog(
+    const reading = readGltfMotionCatalog(
       root,
-      false,
       undefined,
       inventory,
     );
@@ -73,14 +69,14 @@ describe('motion metadata indexing races', () => {
     release();
     await reading;
     expect(
-      (await generateGltfResourceCatalog(root, false, undefined, inventory))
+      (await readGltfMotionCatalog(root, undefined, inventory))
         .resources[0].description,
     ).toBe('after');
   });
   it('does not persist a full resource catalog and rejects cancelled inventories', async () => {
     const inventory: CatalogInventory = { files: new Set(), cancelled: true };
     await expect(
-      generateGltfResourceCatalog(root, false, undefined, inventory),
+      readGltfMotionCatalog(root, undefined, inventory),
     ).rejects.toThrow('closed');
     await expect(
       fs.access(join(root, 'game/gltf-resources.json')),

@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
 import { Worker } from 'worker_threads';
-import { GltfCatalogBackground } from './gltf-catalog-background';
+import { GltfCatalogWorkerClient } from './gltf-catalog-worker-client';
 
 jest.mock('worker_threads', () => ({ Worker: jest.fn() }));
 
-describe('GltfCatalogBackground', () => {
+describe('GltfCatalogWorkerClient', () => {
   let worker: EventEmitter & { postMessage: jest.Mock; terminate: jest.Mock };
   beforeEach(() => {
     jest.clearAllMocks();
@@ -16,7 +16,7 @@ describe('GltfCatalogBackground', () => {
   });
 
   it('returns an immediate snapshot and publishes asynchronous index changes', async () => {
-    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     expect(background.snapshot()).toMatchObject({
       resources: [],
       indexing: true,
@@ -39,7 +39,7 @@ describe('GltfCatalogBackground', () => {
   });
 
   it('posts notifications before a settled request and waits only in settled()', async () => {
-    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     background.notify('games/test/game/3d/motion/new.motionbin');
     const complete = background.settled();
     expect(
@@ -63,7 +63,7 @@ describe('GltfCatalogBackground', () => {
     await background.close();
   });
   it('reuses an explicit runtime refresh result instead of issuing a filesystem notification', async () => {
-    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     const runtime = { resources: [{ type: 'shader', name: 'Eye', config: '3d/runtime/deps/config.json' }], issues: [] };
     background.setRuntimes(runtime);
     expect(worker.postMessage).toHaveBeenCalledWith({ type: 'runtime', runtime });
@@ -72,7 +72,7 @@ describe('GltfCatalogBackground', () => {
   });
 
   it('cancels pending initialization requests when its project closes', async () => {
-    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     const complete = background.settled();
     const rejected = expect(complete).rejects.toThrow('closed');
     await background.close();
@@ -84,7 +84,7 @@ describe('GltfCatalogBackground', () => {
 
   it('keeps snapshots readable after a worker error and rejects export waits', async () => {
     const report = jest.fn();
-    const background = new GltfCatalogBackground(
+    const background = new GltfCatalogWorkerClient(
       'games',
       'engine',
       'test',
@@ -105,7 +105,7 @@ describe('GltfCatalogBackground', () => {
 
   it('reports recoverable watch warnings without poisoning pending requests', async () => {
     const report = jest.fn();
-    const background = new GltfCatalogBackground(
+    const background = new GltfCatalogWorkerClient(
       'games',
       'engine',
       'test',
@@ -120,7 +120,7 @@ describe('GltfCatalogBackground', () => {
 
   it('rejects pending requests if message delivery fails', async () => {
     const report = jest.fn();
-    const background = new GltfCatalogBackground(
+    const background = new GltfCatalogWorkerClient(
       'games',
       'engine',
       'test',
@@ -143,7 +143,7 @@ describe('GltfCatalogBackground', () => {
       throw new Error('startup failed');
     });
     const report = jest.fn();
-    const background = new GltfCatalogBackground(
+    const background = new GltfCatalogWorkerClient(
       'games',
       'engine',
       'test',
@@ -158,7 +158,7 @@ describe('GltfCatalogBackground', () => {
   });
 
   it('publishes bootstrap state with a new revision before scanning finishes', async () => {
-    const background = new GltfCatalogBackground('games', 'engine', 'test');
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     const initial = background.snapshot();
     expect(initial.revision).toBe(-1);
     worker.emit('message', {

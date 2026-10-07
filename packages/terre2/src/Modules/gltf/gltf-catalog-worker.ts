@@ -2,8 +2,8 @@ import { parentPort, workerData } from 'worker_threads';
 import * as fs from 'fs/promises';
 import { join } from 'path';
 import { GltfCatalogIndex } from './gltf-catalog-index';
-import { scanGltfRuntimes } from './gltf-resource-catalog';
-import type { GltfCatalogSnapshot } from './gltf-catalog-background';
+import { scanGltfRuntimes } from './gltf-runtime-registry';
+import type { GltfCatalogSnapshot } from './gltf-catalog-worker-client';
 
 const { root, engineRoot, gameName } = workerData;
 const post = (message: any) => parentPort.postMessage(message);
