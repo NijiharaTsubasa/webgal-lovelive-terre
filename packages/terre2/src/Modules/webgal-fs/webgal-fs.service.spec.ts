@@ -34,6 +34,29 @@ describe('WebgalFsService', () => {
     await fs.rm(testRoot, { recursive: true, force: true });
   });
 
+  it('preserves literal percent sequences when listing filenames', async () => {
+    const names = ['%22Q.jpg', '%25Q.jpg', '100%.jpg'];
+    await Promise.all(names.map(name => fs.writeFile(join(testRoot, name), 'image')));
+    const entries = await service.getDirInfo(testRoot);
+    expect(entries.map(entry => entry.name).sort()).toEqual(names.sort());
+    for (const entry of entries) {
+      expect(entry.path).toBe(join(testRoot, entry.name));
+      expect(entry.size).toBe(5);
+    }
+  });
+
+  it('skips files removed between enumeration and stat', async () => {
+    jest.spyOn(fs, 'readdir').mockResolvedValueOnce(['removed.jpg'] as any);
+    await expect(service.getDirInfo(testRoot)).resolves.toEqual([]);
+  });
+
+  it('propagates stat failures through the directory request', async () => {
+    const error = Object.assign(new Error('access denied'), { code: 'EACCES' });
+    jest.spyOn(fs, 'readdir').mockResolvedValueOnce(['blocked.jpg'] as any);
+    jest.spyOn(fs, 'stat').mockRejectedValueOnce(error);
+    await expect(service.getDirInfo(testRoot)).rejects.toBe(error);
+  });
+
   it('refreshes the glTF catalog after resource edits, renames and deletions', async () => {
     const games = join(testRoot, 'games');
     const game = join(games, 'demo');

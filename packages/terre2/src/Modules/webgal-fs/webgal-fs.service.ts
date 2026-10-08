@@ -93,23 +93,28 @@ export class WebgalFsService {
   async getDirInfo(_dir: string): Promise<IFileInfo[]> {
     const dir = this.normalizeFsPath(_dir);
     const fileNames = await fs.readdir(dir);
-    const dirInfoPromises = fileNames.map((e) => {
-      const elementPath = this.getPath(`${dir}/${e}`);
-      return new Promise<IFileInfo>((resolve) => {
-        fs.stat(elementPath).then((result) => {
-          const ret: IFileInfo = {
-            name: e,
-            isDir: result.isDirectory(),
-            extName: extname(elementPath),
-            path: elementPath,
-            size: result.isDirectory() ? 0 : result.size,
-            lastModified: result.mtimeMs,
-          };
-          resolve(ret);
-        });
-      });
+    const dirInfoPromises = fileNames.map(async (e): Promise<IFileInfo | null> => {
+      // readdir returns literal filesystem names, not URL-encoded paths.
+      const elementPath = join(dir, e);
+      try {
+        const result = await fs.stat(elementPath);
+        return {
+          name: e,
+          isDir: result.isDirectory(),
+          extName: extname(elementPath),
+          path: elementPath,
+          size: result.isDirectory() ? 0 : result.size,
+          lastModified: result.mtimeMs,
+        };
+      } catch (error) {
+        // A file may disappear between directory enumeration and stat.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
     });
-    return await Promise.all(dirInfoPromises);
+    return (await Promise.all(dirInfoPromises)).filter(
+      (entry): entry is IFileInfo => entry !== null,
+    );
   }
 
   /**
