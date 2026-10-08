@@ -12,10 +12,12 @@ import axios from 'axios';
 const InfoIcon = bundleIcon(InfoFilled, InfoRegular);
 
 interface WebgalEngineManifest {
+  id?: string;
   name?: string;
   version?: string;
   type?: string;
   webgalVersion?: string;
+  description?: string;
 }
 
 const versionMap: Map<string, string> = new Map([
@@ -32,6 +34,7 @@ const VersionInfo: React.FunctionComponent = () => {
   const [open, setOpen] = React.useState(false);
   const [engineVersion, setEngineVersion] = React.useState(`未知`);
   const [engineBaseVersion, setEngineBaseVersion] = React.useState<string | null>(null);
+  const [engineDescription, setEngineDescription] = React.useState<string | null>(null);
   const gameDir = useEditorStore.use.subPage();
 
   async function getMainJsFileName(path: string): Promise<string | null> {
@@ -60,6 +63,7 @@ const VersionInfo: React.FunctionComponent = () => {
   }
 
   async function fetchEngineVersion() {
+    setEngineDescription(null);
     // ① 指纹优先：老专版引擎（MyGO 2.2 ~ 3.1.1）的 index-*.js 命中 versionMap
     const fingerprinted = await identifyByFingerprint();
     if (fingerprinted) {
@@ -78,6 +82,9 @@ const VersionInfo: React.FunctionComponent = () => {
           const customName = manifest.name ?? 'Custom';
           setEngineVersion(`${customName} v${manifest.version}`);
           setEngineBaseVersion(`based on WebGAL v${baseVersion}`);
+          if (manifest.id === 'webgal-lovelive.lovelive') {
+            setEngineDescription(manifest.description ?? null);
+          }
         } else {
           setEngineVersion(`WebGAL v${baseVersion}`);
           setEngineBaseVersion(null);
@@ -115,13 +122,15 @@ const VersionInfo: React.FunctionComponent = () => {
             <Text className={style.versionTitle}>{'引擎版本:'}</Text>
             <Text className={style.versionNumber}>{engineVersion}</Text>
             {engineBaseVersion && <Text className={style.versionBase}>{engineBaseVersion}</Text>}
+            {engineDescription && <Text className={style.versionBase}>{engineDescription}</Text>}
           </div>
           <div style={{ display: "flex", flexFlow: "column" }}>
             <Text className={style.versionTitle}>{'编辑器版本:'}</Text>
-            <Text className={style.versionNumber}>{`MyGO v${config.version}`}</Text>
+            <Text className={style.versionNumber}>{`LoveLive v${config.loveliveVersion}`}</Text>
+            <Text className={style.versionBase}>{`MyGO v${config.version}`}</Text>
           </div>
           <div style={{ borderTop: '1px solid var(--black-10pct)', margin: '4px 0' }} />
-          <Text className={style.tip}>{`通常推荐使用「相同版本」的引擎和编辑器, 或者编辑器版本略高于引擎版本`}</Text>
+          <Text className={style.tip}>{`LoveLive 引擎建议配套同版本的 LoveLive 编辑器；`}<br />{`使用 MyGO 引擎时，请参考编辑器标明的 MyGO 版本。`}</Text>
           <Text className={style.tip}>{`如果引擎版本未知, 可能是以下原因导致的:`}</Text>
           <Text className={style.tip}>{`- 我们没有收录除 MyGO 引擎以外的引擎`}</Text>
           <Text className={style.tip}>{`- 我们没有收录比 MyGO 2.2 更早的版本`}</Text>

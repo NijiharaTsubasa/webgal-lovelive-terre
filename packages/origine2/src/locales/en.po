@@ -512,6 +512,9 @@ msgstr "Switch interface language"
 msgid "切换立绘"
 msgstr "Change figure"
 
+msgid "切换立绘类型"
+msgstr ""
+
 msgid "切换背景"
 msgstr "Change background"
 

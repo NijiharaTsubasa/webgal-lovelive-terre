@@ -50,8 +50,11 @@ export default function Sidebar(props: ISidebarProps) {
 
   useEffect(() => {
     if (derivativeUserSet.current) return;
+	const llEngines = derivativeEnginesResp.data?.filter((e) => e.toLocaleLowerCase().includes('lovelive')) || [];
     const mygoEngines = derivativeEnginesResp.data?.filter((e) => e.toLocaleLowerCase().includes('mygo')) || [];
-    if (mygoEngines[0]) {
+    if (llEngines[0]) {
+      setDerivative(getMaxVersionFromString(llEngines));
+    } else if (mygoEngines[0]) {
       const theMygoEngine = getMaxVersionFromString(mygoEngines);
       setDerivative(theMygoEngine);
     }
@@ -64,6 +67,7 @@ export default function Sidebar(props: ISidebarProps) {
 
   useEffect(() => {
     if (templateUserSet.current) return;
+	// 暂时继续默认使用MyGO主题，后续要不要更改待定
     const mygoTemplates = templatesResp.data?.filter((e) => e.name.toLocaleLowerCase().includes('mygo')) || [];
     if (mygoTemplates[0]) {
       const theMygoTemplate = getMaxVersionFromString(mygoTemplates.map(e => e.name));
@@ -157,7 +161,11 @@ export default function Sidebar(props: ISidebarProps) {
                 placeholder={t`游戏目录`}
               />
               {t`选择游戏引擎版本`}
-              <div style={{ fontSize: "12px", color: "var(--text-weak)" }}>{`推荐使用 MyGO_v${config.version}`}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-weak)" }}>
+                {`需要 3D 立绘时，推荐使用 LoveLive v${config.loveliveVersion}。`}
+                <br />
+                {`仅使用 Live2D 立绘时，推荐使用 MyGO v${config.version}。`}
+              </div>
               {selector}
               <Checkbox
                 checked={ignoreTemplate}

@@ -512,6 +512,9 @@ msgstr "表示言語を切り替える"
 msgid "切换立绘"
 msgstr "立ち絵の切り替え"
 
+msgid "切换立绘类型"
+msgstr ""
+
 msgid "切换背景"
 msgstr "背景の切り替え"
 

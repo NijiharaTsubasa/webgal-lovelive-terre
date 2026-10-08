@@ -22,7 +22,7 @@ function App() {
 
   const page = useEditorStore.use.page();
   const subPage = useEditorStore.use.subPage();
-  document.title = useMemo(() => `${page !== 'dashboard' ? `${subPage} - ` : ''}WebGAL Terre MyGO`, [page, subPage]);
+  document.title = useMemo(() => `${page !== 'dashboard' ? `${subPage} - ` : ''}WebGAL Terre LoveLive`, [page, subPage]);
   const language = useEditorStore.use.language();
   const [appKeyLang, setAppKeyLang] = useState(language);
 

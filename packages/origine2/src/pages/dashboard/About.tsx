@@ -34,12 +34,14 @@ const About: React.FunctionComponent = () => {
       <PopoverSurface>
         <div>
           <Text as='h1' block size={500}>
-            WebGAL Terre MyGO
+            WebGAL Terre LoveLive
           </Text>
           <Text as='b' block>
             <p>{t`视觉小说编辑，再进化`}</p>
             <small>
-              {t`当前版本`}: {`MyGO v${config.version} (${__INFO.buildTime.toLocaleString('zh-CN', dateTimeOptions).replaceAll('/', '-')})`}
+              {t`当前版本`}: {`LoveLive v${config.loveliveVersion} (${__INFO.buildTime.toLocaleString('zh-CN', dateTimeOptions).replaceAll('/', '-')})`}
+              <br />
+              <span>{`WebGAL MyGO 版本: ${config.version}`}</span>
               <br />
               {/* {
                 latestRelease &&
@@ -50,7 +52,7 @@ const About: React.FunctionComponent = () => {
                   <br />
                 </>
               } */}
-              <span>{`WebGAL version: ${__INFO.version}`}</span>
+              <span>{`WebGAL 版本: ${__INFO.version}`}</span>
               <br />
               <span>{t`运行平台`}: {osInfo?.platform} {osInfo?.arch}</span>
               <br />
