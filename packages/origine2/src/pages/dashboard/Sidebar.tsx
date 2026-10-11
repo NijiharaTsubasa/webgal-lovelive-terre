@@ -67,11 +67,12 @@ export default function Sidebar(props: ISidebarProps) {
 
   useEffect(() => {
     if (templateUserSet.current) return;
-	// 暂时继续默认使用MyGO主题，后续要不要更改待定
+    const allStarsTemplates = templatesResp.data?.filter((e) => e.name.toLocaleLowerCase().includes('all stars')) || [];
     const mygoTemplates = templatesResp.data?.filter((e) => e.name.toLocaleLowerCase().includes('mygo')) || [];
-    if (mygoTemplates[0]) {
-      const theMygoTemplate = getMaxVersionFromString(mygoTemplates.map(e => e.name));
-      setTemplateDir(theMygoTemplate);
+    const preferredTemplates = allStarsTemplates.length ? allStarsTemplates : mygoTemplates;
+    if (preferredTemplates[0]) {
+      const preferredName = getMaxVersionFromString(preferredTemplates.map(e => e.name));
+      setTemplateDir(preferredTemplates.find(e => e.name === preferredName)?.dir);
     }
   }, [templatesResp.data]);
 
