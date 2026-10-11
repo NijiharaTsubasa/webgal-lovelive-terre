@@ -118,8 +118,7 @@ describe('fixed glTF resource directories', () => {
       });
     const inventory: CatalogInventory = { files: new Set() };
     expect(
-      (await readGltfMotionCatalog(root, undefined, inventory))
-        .resources,
+      (await readGltfMotionCatalog(root, undefined, inventory)).resources,
     ).toHaveLength(5);
     const index = JSON.parse(
       await fs.readFile(join(root, 'game/3d/runtime/index.json'), 'utf8'),
@@ -128,6 +127,117 @@ describe('fixed glTF resource directories', () => {
     const reads = jest.spyOn(fs, 'readdir');
     await readGltfMotionCatalog(root, undefined, inventory);
     expect(reads).not.toHaveBeenCalled();
+  });
+  it('publishes 2000 path entries before a blocked motion header finishes', async () => {
+    await motion('game/3d/motion/slow.motionbin');
+    const slow = join(root, 'game/3d/motion/slow.motionbin');
+    const inventory: CatalogInventory = {
+      files: new Set([slow]),
+      cache: new Map(),
+    };
+    for (let i = 0; i < 1999; i++) {
+      const path = join(root, `game/3d/motion/idle${i}.motionbin`);
+      inventory.files.add(path);
+      inventory.cache.set(path, { description: '缓存说明' });
+    }
+    let release: () => void, opened: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const began = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    const original = fs.open;
+    jest
+      .spyOn(fs, 'open')
+      .mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        opened();
+        await gate;
+        return original(...args);
+      });
+    const progress = jest.fn();
+    const reading = readGltfMotionCatalog(root, undefined, inventory, progress);
+    await began;
+    try {
+      expect(progress).toHaveBeenCalled();
+      expect(progress.mock.calls[0][0].resources).toHaveLength(2000);
+      expect(
+        progress.mock.calls[0][0].resources.find(
+          (entry) => entry.name === 'slow.motionbin',
+        ),
+      ).toBeDefined();
+    } finally {
+      release();
+      await reading;
+    }
+    expect(
+      (await reading).resources.find((entry) => entry.name === 'slow.motionbin')
+        .description,
+    ).toBe('被拖走');
+  });
+  it('keeps path entries when metadata fails and continues reading other motions', async () => {
+    await put('game/3d/motion/broken.motionbin', 'incomplete');
+    await motion('game/3d/motion/next.motionbin');
+    const progress = jest.fn();
+    const result = await readGltfMotionCatalog(
+      root,
+      undefined,
+      undefined,
+      progress,
+    );
+    expect(progress.mock.calls[0][0].resources).toHaveLength(2);
+    expect(result.resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'broken.motionbin' }),
+        expect.objectContaining({
+          name: 'next.motionbin',
+          description: '被拖走',
+        }),
+      ]),
+    );
+    expect(result.issues).toEqual([
+      expect.stringContaining('broken.motionbin'),
+    ]);
+    expect(result.issues[0]).toContain('prefix');
+  });
+  it('publishes later descriptions while an earlier file remains blocked', async () => {
+    await motion('game/3d/motion/first.motionbin');
+    await motion('game/3d/motion/later.motionbin');
+    let release: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = fs.open;
+    jest
+      .spyOn(fs, 'open')
+      .mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+        if (String(args[0]).endsWith('first.motionbin')) await gate;
+        return original(...args);
+      });
+    let enriched: () => void;
+    const arrived = new Promise<void>((resolve) => {
+      enriched = resolve;
+    });
+    const reading = readGltfMotionCatalog(
+      root,
+      undefined,
+      undefined,
+      (result) => {
+        if (
+          result.resources.some(
+            (entry) => entry.name === 'later.motionbin' && entry.description,
+          )
+        )
+          enriched();
+      },
+    );
+    try {
+      await arrived;
+    } finally {
+      release();
+      await reading;
+    }
+    expect((await reading).resources).toHaveLength(2);
   });
   it('browses only current model directory and validates selected packages', async () => {
     const preview = 'data:image/webp;base64,ABC';

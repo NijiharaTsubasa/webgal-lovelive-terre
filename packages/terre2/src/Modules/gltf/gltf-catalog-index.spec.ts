@@ -2,6 +2,8 @@ import * as fs from 'fs/promises';
 import * as nativeFs from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { EventEmitter } from 'events';
+import * as chokidar from 'chokidar';
 import { GltfCatalogIndex } from './gltf-catalog-index';
 
 describe('dedicated motion directory watcher', () => {
@@ -51,6 +53,42 @@ describe('dedicated motion directory watcher', () => {
     const reads = jest.spyOn(fs, 'readdir');
     for (let i = 0; i < 10; i++) await index.get(game);
     expect(reads).not.toHaveBeenCalled();
+  });
+  it('publishes motions and completes directory discovery even if watcher ready never arrives', async () => {
+    await index.close();
+    await put('game/3d/mtn_exp/anon/bye.mtn', {});
+    const watcher = Object.assign(new EventEmitter(), {
+      close: jest.fn(async () => {}),
+    });
+    jest.spyOn(chokidar, 'watch').mockReturnValue(watcher as any);
+    const snapshots = jest.fn();
+    index = new GltfCatalogIndex(root, '', () => {}, game, () => {}, snapshots);
+    await index.start();
+    expect(snapshots.mock.calls.some(([snapshot]) =>
+      snapshot.resources.some(entry => entry.name === 'anon/bye'),
+    )).toBe(true);
+    expect(snapshots.mock.calls[snapshots.mock.calls.length - 1][0].indexing).toBe(false);
+    expect((await index.get(game)).resources).toEqual([
+      expect.objectContaining({ name: 'anon/bye' }),
+    ]);
+  });
+  it('does not republish delayed watcher discovery of files already indexed', async () => {
+    await index.close();
+    const file = await put('game/3d/mtn_exp/anon/bye.mtn', {});
+    const watcher = Object.assign(new EventEmitter(), { close: jest.fn(async () => {}) });
+    jest.spyOn(chokidar, 'watch').mockReturnValue(watcher as any);
+    const snapshots = jest.fn();
+    index = new GltfCatalogIndex(root, '', () => {}, game, () => {}, snapshots);
+    const initial = await index.get(game);
+    snapshots.mockClear();
+    const stat = await fs.stat(file);
+    watcher.emit('all', 'add', file, stat);
+    const discovered = await index.get(game);
+    expect(discovered.revision).toBe(initial.revision);
+    expect(snapshots).not.toHaveBeenCalled();
+    await fs.writeFile(file, '{"updated":true}');
+    watcher.emit('all', 'change', file, await fs.stat(file));
+    expect((await index.get(game)).revision).toBeGreaterThan(initial.revision);
   });
   it('discovers external additions with default fades and removes deleted parameters', async () => {
     const file = await put('game/3d/mtn_exp/anon/bye.mtn', {});

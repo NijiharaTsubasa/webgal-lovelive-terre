@@ -118,6 +118,15 @@ describe('GltfCatalogWorkerClient', () => {
     await background.close();
   });
 
+  it('forwards background read progress to the application logger', async () => {
+    const progress = jest.fn();
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test', () => {}, progress);
+    background.start();
+    worker.emit('message', { type: 'progress', message: 'glTF 动作说明读取: 12/2000, 等待 first.motionbin (打开文件)' });
+    expect(progress).toHaveBeenCalledWith(expect.stringContaining('打开文件'));
+    await background.close();
+  });
+
   it('rejects pending requests if message delivery fails', async () => {
     const report = jest.fn();
     const background = new GltfCatalogWorkerClient(

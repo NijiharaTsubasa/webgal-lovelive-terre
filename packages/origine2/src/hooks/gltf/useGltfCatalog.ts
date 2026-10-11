@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 import axios from 'axios';
 import useSWR from 'swr';
 import { v4 as uuidv4 } from 'uuid';
 import { GltfCatalogResult } from '@/utils/gltf/gltfFigure';
-import { eventBus } from '@/utils/eventBus';
 
 const EMPTY_CATALOG: GltfCatalogResult = { enabled: false, resources: [], revision: 0 };
 const requests = new Map<string, Promise<GltfCatalogResult>>();
@@ -44,17 +43,6 @@ export default function useGltfCatalog(game: string | undefined, monitor = false
     try { return await result.mutate(); }
     catch { return undefined; }
   }, [result.mutate]);
-  const previous = useRef<{ game: string; revision: number; enabled: boolean }>();
-  useEffect(() => {
-    if (!monitor || !game || !result.data) return;
-    const next = { game, revision: result.data.revision, enabled: result.data.enabled };
-    const old = previous.current;
-    previous.current = next;
-    if (old?.game === game && (old.enabled || next.enabled)
-      && (old.revision !== next.revision || old.enabled !== next.enabled)) {
-      eventBus.emit('iframe:refresh-game', null);
-    }
-  }, [monitor, game, result.data?.revision, result.data?.enabled]);
   return { catalog: result.data ?? EMPTY_CATALOG, refresh, error: result.error };
 }
 

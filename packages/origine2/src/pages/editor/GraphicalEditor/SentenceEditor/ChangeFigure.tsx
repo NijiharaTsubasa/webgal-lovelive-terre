@@ -774,7 +774,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
             />
           </div>
           {figureSelectionError && <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)' }}>{figureSelectionError}</div>}
-          {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">正在读取 3D 动作与表情，列表会自动更新。</div>}
+          {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">{gltfCatalog.resources.some(entry => entry.type === 'motion' || entry.type === 'garupa-motion' || entry.type === 'garupa-expression')
+            ? '正在补充动作说明，动作与表情列表已可使用。'
+            : '正在发现 3D 动作与表情，列表会自动更新。'}</div>}
           {gltfCatalog.error && <div role="alert">{gltfCatalog.error}</div>}
         </CommonOptions>}
       <CommonOptions title={t`z-index`} key="z-index">

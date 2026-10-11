@@ -314,7 +314,7 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   assert.deepEqual([...selectors[0].props.optionList], ['extra/new', 'hasunosora/drag']);
   assert.equal(selectors[0].props.optionDescriptions.get('hasunosora/drag'), '被拉走');
   assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
-  assert.equal(refreshes, 1);
+  assert.equal(refreshes, 0, 'catalog changes update options without reloading the running preview');
   revision = 3;
   nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
@@ -328,7 +328,7 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
   assert.equal(nodes(tree, 'SearchableCascader').length, 0, 'disabled engine response removes glTF selectors');
-  assert.equal(refreshes, 3, 'glTF-enabled to disabled transition refreshes the running preview');
+  assert.equal(refreshes, 0, 'engine capability detection belongs to the editor, not preview lifecycle');
 });
 
 test('a readable glTF model keeps its animation panel when an adapter config is unavailable', async () => {
@@ -488,6 +488,35 @@ test('shared catalog conditionally retains resources and issues, clears recovere
   await fetcher();
   assert.equal('revision' in calls[2], false, 'a different project cannot inherit a previous revision');
   assert.equal(options.refreshInterval, 0, 'picker consumers do not establish their own polling loops');
+});
+
+test('catalog progress and completion never reload the game preview', async () => {
+  const { code } = await transform(await readFile(new URL('../src/hooks/gltf/useGltfCatalog.ts', import.meta.url), 'utf8'), {
+    loader: 'ts', format: 'cjs',
+  });
+  let stored = { enabled: true, resources: [], revision: 1, indexing: true };
+  const previous = {}, events = [];
+  const module = { exports: {} };
+  vm.runInNewContext(code, { module, exports: module.exports, require(name) {
+    if (name === 'react') return { useCallback: fn => fn, useRef: () => previous, useEffect: fn => fn() };
+    if (name === 'swr') return { __esModule: true, default: () => ({ data: stored, mutate() {} }) };
+    if (name === '@/utils/eventBus') return { eventBus: { emit: (...args) => events.push(args) } };
+    return {};
+  } });
+  module.exports.default('project', true);
+  for (let revision = 2; revision <= 5; revision++) {
+    stored = { ...stored, revision };
+    module.exports.default('project', true);
+  }
+  assert.equal(events.length, 0);
+  stored = { ...stored, revision: 6, indexing: false };
+  module.exports.default('project', true);
+  assert.equal(events.length, 0);
+  module.exports.default('project', true);
+  assert.equal(events.length, 0);
+  stored = { ...stored, revision: 7, enabled: false };
+  module.exports.default('project', true);
+  assert.equal(events.length, 0);
 });
 
 test('project session renews its lease and releases it on tab hide or component cleanup', async () => {

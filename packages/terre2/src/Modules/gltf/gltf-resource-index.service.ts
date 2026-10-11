@@ -110,6 +110,7 @@ export class GltfResourceIndexService implements OnModuleDestroy {
         UserDataService.getEngineTemplateRoot(),
         gameName,
         (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
+        (message) => this.logger.log(message),
       );
       this.catalogIndexes.set(gameName, index);
       index.start();

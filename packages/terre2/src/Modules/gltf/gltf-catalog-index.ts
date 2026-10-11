@@ -15,6 +15,7 @@ import {
   invalidateCatalogFile,
 } from './gltf-motion-catalog';
 import type { CatalogInventory } from './gltf-resource-types';
+import { walk } from './gltf-files';
 
 interface GameIndex {
   inventory: CatalogInventory;
@@ -194,23 +195,24 @@ export class GltfCatalogIndex {
         if (!this.ready) reject(error);
       });
       this.watcher.once('ready', () => {
+        this.reportProgress(`glTF 文件监听就绪: ${this.gameName}, ${elapsed()}`);
+      });
+      // Directory enumeration needs neither per-file stat nor watcher readiness.
+      // Native watcher registration may be slow on Windows; it must not gate UI.
+      void (async () => {
+        const base = join(this.root, this.gameName, 'game/3d');
+        const files = [
+          ...await walk(join(base, 'motion'), path => path.endsWith('.motionbin')),
+          ...await walk(join(base, 'mtn_exp'), path => path.endsWith('.mtn') || path.endsWith('.exp.json')),
+        ];
+        if (this.closed) return;
+        const state = this.state(this.gameName);
+        for (const path of files) state.inventory.files.add(path);
         this.ready = true;
         this.reportProgress(`glTF 文件发现完成: ${this.gameName}, ${fileCount()} 个相关文件, ${elapsed()}`);
-        // Serial game initialization bounds open files across many projects.
-        void (async () => {
-          for (const [game, state] of this.games) {
-            try {
-              await this.flush(game, state);
-            } catch (error) {
-              this.report(error);
-            }
-          }
-        })().then(() => {
-          const state = this.games.get(this.gameName);
-          this.reportProgress(`glTF 索引完成: ${this.gameName}, ${state?.result?.resources.length ?? 0} 个资源, ${elapsed()}`);
-          done();
-        }, reject);
-      });
+        await this.flush(this.gameName, state);
+        this.reportProgress(`glTF 索引完成: ${this.gameName}, ${state.result?.resources.length ?? 0} 个资源, ${elapsed()}`);
+      })().then(done, reject);
     });
     const stopProgress = () => {
       if (this.startupProgress) clearInterval(this.startupProgress);
@@ -355,6 +357,12 @@ export class GltfCatalogIndex {
       } else {
         const fingerprint =
           stat && `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+        // Windows can finish initial watcher registration after directory discovery.
+        // Its first add for an indexed file establishes the watch baseline, not a change.
+        if (event === 'add' && state.inventory.files.has(path) && !state.observed.has(path)) {
+          if (fingerprint) state.observed.set(path, fingerprint);
+          return;
+        }
         if (fingerprint && state.observed.get(path) === fingerprint) return;
         if (fingerprint) state.observed.set(path, fingerprint);
         state.inventory.files.add(path);
@@ -388,6 +396,13 @@ export class GltfCatalogIndex {
             join(this.root, game),
             this.engineRoot,
             state.inventory,
+            result => {
+              if (this.closed) return;
+              state.result = result;
+              state.revision++;
+              this.publish(state, true);
+            },
+            this.reportProgress,
           );
           for (const [path, recovery] of this.recoveries) {
             const location = this.locate(path);

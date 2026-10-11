@@ -12,9 +12,11 @@ export function invalidateCatalogFile(
   const generations = (inventory.generations ??= new Map());
   generations.set(path, (generations.get(path) ?? 0) + 1);
 }
-async function motionHeader(path: string) {
+async function motionHeader(path: string, stage: (value: string) => void) {
+  stage('打开文件');
   const handle = await fs.open(path, 'r');
   try {
+    stage('读取前缀');
     const prefix = Buffer.alloc(12);
     const read = await handle.read(prefix, 0, prefix.length, 0);
     if (
@@ -23,13 +25,17 @@ async function motionHeader(path: string) {
     )
       throw new Error('Invalid binary motion prefix');
     const length = prefix.readUInt32LE(8);
+    stage('读取文件大小');
     if (length > (await handle.stat()).size - 12)
       throw new Error('Truncated binary motion header');
     const header = Buffer.alloc(length);
+    stage('读取 JSON 头部');
     if ((await handle.read(header, 0, length, 12)).bytesRead !== length)
       throw new Error('Truncated binary motion header');
+    stage('解析 JSON 头部');
     return JSON.parse(header.toString('utf8'));
   } finally {
+    stage('关闭文件');
     await handle.close();
   }
 }
@@ -37,10 +43,17 @@ const relevant = (path: string) =>
   path.endsWith('.motionbin') ||
   path.endsWith('.mtn') ||
   path.endsWith('.exp.json');
+export interface MotionCatalogResult {
+  enabled: boolean;
+  resources: GltfCatalogEntry[];
+  issues: string[];
+}
 export async function readGltfMotionCatalog(
   gameRoot: string,
   defaultEngineRoot?: string,
   inventory?: CatalogInventory,
+  onProgress?: (result: MotionCatalogResult) => void,
+  reportProgress?: (message: string) => void,
 ) {
   if (inventory?.cancelled) throw new Error('glTF resource index was closed');
   if (!(await gltfEnabled(gameRoot, defaultEngineRoot)))
@@ -69,6 +82,13 @@ export async function readGltfMotionCatalog(
       cache.set(path, value);
     return value;
   }
+  const headers: { path: string; entry: GltfCatalogEntry }[] = [];
+  const applyHeader = (entry: GltfCatalogEntry, header: any) => {
+    if (typeof header?.description === 'string' && header.description)
+      entry.description = header.description;
+    if (typeof header?.motionGroup === 'string')
+      entry.motionGroup = header.motionGroup;
+  };
   for (const path of files.sort()) {
     const native = inside(motionRoot, path) && path.endsWith('.motionbin'),
       parameter = inside(parameterRoot, path);
@@ -80,34 +100,26 @@ export async function readGltfMotionCatalog(
       ? 'garupa-expression'
       : undefined;
     if (!type) continue;
-    try {
-      const name = native
-        ? namePath(motionRoot, path)
-        : namePath(parameterRoot, path).slice(
-            0,
-            -(type === 'garupa-motion' ? 4 : 9),
-          );
-      const entry: GltfCatalogEntry = {
-        type,
-        name,
-        config: urlPath(game, path),
-        src: urlPath(game, path),
-      };
-      if (native) {
-        const header = await cached(path, () => motionHeader(path));
-        const description = header?.description;
-        if (typeof description === 'string' && description)
-          entry.description = description;
-        const motionGroup = header?.motionGroup;
-        if (typeof motionGroup === 'string') entry.motionGroup = motionGroup;
-      } else if (type === 'garupa-motion') {
-        entry.fade_in = 500;
-        entry.fade_out = 500;
-      }
-      resources.push(entry);
-    } catch (error) {
-      issues.push(`${namePath(game, path)}: ${error.message}`);
+    const name = native
+      ? namePath(motionRoot, path)
+      : namePath(parameterRoot, path).slice(
+          0,
+          -(type === 'garupa-motion' ? 4 : 9),
+        );
+    const entry: GltfCatalogEntry = {
+      type,
+      name,
+      config: urlPath(game, path),
+      src: urlPath(game, path),
+    };
+    if (native) {
+      if (cache.has(path)) applyHeader(entry, cache.get(path));
+      else headers.push({ path, entry });
+    } else if (type === 'garupa-motion') {
+      entry.fade_in = 500;
+      entry.fade_out = 500;
     }
+    resources.push(entry);
   }
   const runtime = inventory
     ? (inventory.runtime ??= await scanGltfRuntimes(gameRoot, () =>
@@ -115,9 +127,77 @@ export async function readGltfMotionCatalog(
       ))
     : await scanGltfRuntimes(gameRoot);
   if (inventory?.cancelled) throw new Error('glTF resource index was closed');
-  return {
+  const snapshot = (): MotionCatalogResult => ({
     enabled: true,
-    resources: [...resources, ...runtime.resources],
+    resources: [
+      ...resources.map((entry) => ({ ...entry })),
+      ...runtime.resources,
+    ],
     issues: [...issues, ...runtime.issues],
+  });
+  // Paths are sufficient to select/play a motion; descriptions are enrichment.
+  onProgress?.(snapshot());
+  let next = 0,
+    completed = 0,
+    lastPublished = Date.now();
+  let publishTimer: ReturnType<typeof setTimeout>;
+  const publish = () => {
+    publishTimer = undefined;
+    lastPublished = Date.now();
+    onProgress?.(snapshot());
   };
+  const active = new Map<string, string>();
+  const timer =
+    reportProgress && headers.length
+      ? setInterval(() => {
+          reportProgress(
+            `glTF 动作说明读取: ${completed}/${headers.length}, 等待 ${[
+              ...active,
+            ]
+              .map(([path, stage]) => `${namePath(game, path)} (${stage})`)
+              .join('; ')}`,
+          );
+        }, 10000)
+      : undefined;
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(4, headers.length) }, async () => {
+        while (next < headers.length) {
+          if (inventory?.cancelled)
+            throw new Error('glTF resource index was closed');
+          const { path, entry } = headers[next++];
+          const generation = inventory?.generations?.get(path) ?? 0;
+          try {
+            const header = await cached(path, () =>
+              motionHeader(path, (stage) => active.set(path, stage)),
+            );
+            if (generation === (inventory?.generations?.get(path) ?? 0))
+              applyHeader(entry, header);
+          } catch (error) {
+            issues.push(`${namePath(game, path)}: ${error.message}`);
+          } finally {
+            active.delete(path);
+            completed++;
+          }
+          if (inventory?.cancelled)
+            throw new Error('glTF resource index was closed');
+          if (onProgress) {
+            if (Date.now() - lastPublished >= 250) {
+              if (publishTimer) clearTimeout(publishTimer);
+              publish();
+            } else if (!publishTimer) {
+              publishTimer = setTimeout(
+                publish,
+                250 - (Date.now() - lastPublished),
+              );
+            }
+          }
+        }
+      }),
+    );
+  } finally {
+    if (timer) clearInterval(timer);
+    if (publishTimer) clearTimeout(publishTimer);
+  }
+  return snapshot();
 }
