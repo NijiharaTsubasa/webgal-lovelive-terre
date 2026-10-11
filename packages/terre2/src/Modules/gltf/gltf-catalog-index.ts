@@ -455,11 +455,6 @@ export class GltfCatalogIndex {
     await this.start();
     const location = this.locate(path);
     if (!location) return;
-    if (location.inner === 'game/3d/runtime' || location.inner.startsWith('game/3d/runtime/')) {
-      this.state(location.game).inventory.runtime = undefined;
-      this.state(location.game).dirty = true;
-      return flush ? this.get(location.game) : undefined;
-    }
     if (
       !this.relevant(location.inner) &&
       location.inner &&

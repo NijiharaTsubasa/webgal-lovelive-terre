@@ -33,7 +33,7 @@ function readCatalog(game: string) {
   return request;
 }
 
-// One cache per project is shared by the picker, resource browser and controls.
+// One motion/expression cache per project is shared by the controls.
 // Only the editor provider polls it; consumers can request an immediate refresh.
 export default function useGltfCatalog(game: string | undefined, monitor = false) {
   const result = useSWR<GltfCatalogResult>(game ? ['gltf-catalog', game] : null,

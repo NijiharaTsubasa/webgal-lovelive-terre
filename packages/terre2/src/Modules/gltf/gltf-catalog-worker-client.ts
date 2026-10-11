@@ -25,14 +25,6 @@ export class GltfCatalogWorkerClient {
     revision: -1,
     indexing: true,
   };
-  private sequence = 0;
-  private pending = new Map<
-    number,
-    {
-      resolve: (value: GltfCatalogSnapshot) => void;
-      reject: (error: Error) => void;
-    }
-  >();
 
   constructor(
     private readonly root: string,
@@ -79,12 +71,6 @@ export class GltfCatalogWorkerClient {
         if (message.type === 'progress') this.reportProgress(message.message);
         if (message.type === 'warning') this.report(new Error(message.error));
         if (message.type === 'error') this.fail(new Error(message.error));
-        if (message.requestId !== undefined) {
-          const request = this.pending.get(message.requestId);
-          this.pending.delete(message.requestId);
-          if (message.error) request?.reject(new Error(message.error));
-          else request?.resolve(this.latest);
-        }
       });
       this.worker.on('error', (error) => this.fail(error));
       this.worker.on('exit', (code) => {
@@ -99,8 +85,6 @@ export class GltfCatalogWorkerClient {
   private fail(error: Error) {
     if (this.closed) return;
     this.latest = { ...this.latest, indexing: false, error: error.message };
-    for (const request of this.pending.values()) request.reject(error);
-    this.pending.clear();
     this.report(error);
   }
 
@@ -123,30 +107,17 @@ export class GltfCatalogWorkerClient {
 
   setRuntimes(runtime: { resources: GltfCatalogEntry[]; issues: string[] }) {
     this.start();
-    if (!this.closed && this.worker) this.worker.postMessage({ type: 'runtime', runtime });
-  }
-
-  settled(): Promise<GltfCatalogSnapshot> {
-    this.start();
-    if (this.closed)
-      return Promise.reject(new Error('glTF resource index is closed'));
-    if (this.latest.error) return Promise.reject(new Error(this.latest.error));
-    return new Promise((resolve, reject) => {
-      const requestId = ++this.sequence;
-      this.pending.set(requestId, { resolve, reject });
+    if (!this.closed && this.worker && !this.latest.error) {
       try {
-        this.worker.postMessage({ type: 'settled', requestId });
+        this.worker.postMessage({ type: 'runtime', runtime });
       } catch (error) {
         this.fail(error);
       }
-    });
+    }
   }
 
   async close() {
     this.closed = true;
-    for (const request of this.pending.values())
-      request.reject(new Error('glTF resource index is closed'));
-    this.pending.clear();
     await this.worker?.terminate();
     this.worker = undefined;
   }

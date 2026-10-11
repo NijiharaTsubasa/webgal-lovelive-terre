@@ -121,12 +121,16 @@ describe('dedicated motion directory watcher', () => {
       expect.objectContaining({ name: 'idle' }),
     ]);
   });
-  it('does not discover unopened projects or model directory notifications', async () => {
+  it('ignores unopened projects and model/runtime filesystem notifications', async () => {
     await fs.mkdir(join(root, 'other/game/3d/mtn_exp'), { recursive: true });
     await fs.writeFile(join(root, 'other/game/3d/mtn_exp/no.mtn'), '{}');
     await index.notify(join(root, 'other/game/3d/mtn_exp/no.mtn'));
     await put('game/3d/figure/model/hidden.mtn', {});
     await index.notify(join(root, game, 'game/3d/figure'));
+    const before = await index.get(game);
+    await put('game/3d/runtime/unused/config.json', { components: [{ type: 'shader', name: 'unused' }] });
+    await index.notify(join(root, game, 'game/3d/runtime'));
+    expect((await index.get(game)).revision).toBe(before.revision);
     expect((await index.get(game)).resources).toEqual([]);
   });
   it('recovers a truncated motionbin when the file finishes copying', async () => {

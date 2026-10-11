@@ -19,6 +19,15 @@ describe('WebgalFsService', () => {
   );
   let service: WebgalFsService;
   let index: GltfResourceIndexService;
+  async function waitForCatalog(accept: (snapshot: any) => boolean) {
+    const deadline = Date.now() + 7000;
+    while (Date.now() < deadline) {
+      const snapshot = await index.getGltfCatalog('demo');
+      if (!snapshot.indexing && accept(snapshot)) return snapshot;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error('Catalog did not publish the expected result');
+  }
 
   beforeEach(async () => {
     index = new GltfResourceIndexService(new ConsoleLogger());
@@ -76,19 +85,14 @@ describe('WebgalFsService', () => {
     const config = join(resource, 'idle.mtn');
     await index.getGltfCatalog('demo');
     await service.updateTextFile(config, '{}');
-    await index.ensureGltfCatalog('demo');
-    expect(
-      (await index.ensureGltfCatalog('demo')).resources[0].name,
-    ).toBe('idle');
+    expect((await waitForCatalog(snapshot => snapshot.resources[0]?.name === 'idle')).resources[0].name).toBe('idle');
     await service.renameFile(config, 'not-a-manifest.json');
-    await index.ensureGltfCatalog('demo');
-    expect((await index.ensureGltfCatalog('demo')).resources).toEqual(
+    expect((await waitForCatalog(snapshot => !snapshot.resources.length)).resources).toEqual(
       [],
     );
     await service.updateTextFile(config, '{}');
     await service.deleteFile(config);
-    await index.ensureGltfCatalog('demo');
-    expect((await index.ensureGltfCatalog('demo')).resources).toEqual(
+    expect((await waitForCatalog(snapshot => !snapshot.resources.length)).resources).toEqual(
       [],
     );
   });
@@ -138,15 +142,13 @@ describe('WebgalFsService', () => {
     expect(results.every((result) => result.indexing)).toBe(true);
     expect((index as any).catalogIndexes.size).toBe(1);
     expect(start.mock.instances.every(instance => instance === start.mock.instances[0])).toBe(true);
-    expect((await index.ensureGltfCatalog('demo')).resources).toEqual([expect.objectContaining({ name: 'idle' })]);
+    expect((await waitForCatalog(snapshot => snapshot.resources[0]?.name === 'idle')).resources).toEqual([expect.objectContaining({ name: 'idle' })]);
   });
 
   it('returns a snapshot without waiting for slow discovery', async () => {
     jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
-    const settle = jest.spyOn(GltfCatalogWorkerClient.prototype, 'settled').mockImplementation(() => new Promise(() => {}));
     const result = await index.getGltfCatalog('demo');
     expect(result).toMatchObject({ indexing: true, resources: [] });
-    expect(settle).not.toHaveBeenCalled();
   });
 
   it('keeps an index until the last editor session leaves and reclaims expired sessions', async () => {
@@ -188,21 +190,21 @@ describe('WebgalFsService', () => {
     expect((index as any).catalogIndexes.size).toBe(1);
   });
 
-  it('does not retire the worker while a long export is waiting for initial discovery', async () => {
-    jest.useFakeTimers();
-    try {
-      jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
-      const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
-      let finish: (value: any) => void;
-      jest.spyOn(GltfCatalogWorkerClient.prototype, 'settled').mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-      const exporting = index.ensureGltfCatalog('demo');
-      await jest.advanceTimersByTimeAsync(60000);
-      expect(close).not.toHaveBeenCalled();
-      finish({ enabled: true, resources: [], issues: [], revision: 1, indexing: false });
-      await exporting;
-      await jest.advanceTimersByTimeAsync(10000);
-      expect(close).toHaveBeenCalledTimes(1);
-    } finally { jest.useRealTimers(); }
+  it('prepares runtime registration for export without starting motion discovery', async () => {
+    const game = join(testRoot, 'games', 'demo');
+    const runtime = join(game, 'game/3d/runtime/example');
+    await fs.mkdir(runtime, { recursive: true });
+    await fs.writeFile(join(game, 'index.html'), '');
+    await fs.writeFile(join(game, 'webgal-engine.json'), JSON.stringify({ id: 'webgal-lovelive.lovelive' }));
+    await fs.writeFile(join(runtime, 'config.json'), JSON.stringify({ components: [{ type: 'shader', name: 'Eye' }] }));
+    const start = jest.spyOn(GltfCatalogWorkerClient.prototype, 'start');
+    await index.prepareGltfExport('demo');
+    expect(start).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(join(runtime, '../index.json'), 'utf8'))).toEqual({ packages: ['example/config.json'] });
+    await fs.writeFile(join(game, 'webgal-engine.json'), JSON.stringify({ id: 'webgal-mygo.mygo' }));
+    await fs.unlink(join(runtime, '../index.json'));
+    await index.prepareGltfExport('demo');
+    await expect(fs.access(join(runtime, '../index.json'))).rejects.toThrow();
   });
   it('does not restart motion discovery when copying model or runtime packages', async () => {
     jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});

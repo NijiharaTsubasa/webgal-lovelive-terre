@@ -80,7 +80,7 @@ async function bootstrap() {
   }
 }
 
-// Preserve ordering for explicit writes and export requests; external watcher updates
+// Preserve ordering for explicit writes; external watcher updates
 // are published by the index callback without timer-driven rescans.
 let operations = bootstrap().catch(failure);
 const pendingPaths = new Set<string>();
@@ -111,22 +111,13 @@ parentPort.on('message', (message) => {
   }
   operations = operations.then(async () => {
     try {
-      if (message.type === 'settled') {
-        await flushNotifications();
-        const result = initialSnapshot?.enabled ? await index.get(gameName) : initialSnapshot;
-        post({
-          requestId: message.requestId,
-          snapshot: { ...result, indexing: false },
-        });
-      } else if (message.type === 'runtime') {
+      if (message.type === 'runtime') {
         index.setRuntimes(message.runtime);
         const result = await index.get(gameName);
         post({ type: 'snapshot', snapshot: { ...result, indexing: false } });
       }
     } catch (error) {
-      if (message.requestId !== undefined)
-        post({ requestId: message.requestId, error: error.message });
-      else failure(error);
+      failure(error);
     }
   });
 });

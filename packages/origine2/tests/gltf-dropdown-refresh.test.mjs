@@ -265,12 +265,17 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
     { type: 'model', name: 'model', config: `figure/${modelPath}` },
     { type: 'garupa-motion', name: revision === 1 ? 'old' : 'extra/new', config: 'figure/params/config.json' },
     { type: 'motion', name: 'hasunosora/drag', description: revision === 1 ? '被拖走' : '被拉走', config: 'figure/motions/config.json' },
+    ...(revision >= 4 ? [
+      { type: 'garupa-expression-adapter', name: 'face', config: '3d/runtime/face/config.json' },
+      { type: 'garupa-expression', name: 'anon/smile01', config: '3d/mtn_exp/anon/smile01.exp.json' },
+    ] : []),
   ];
-  const model = () => ({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: revision === 1 ? 'Sad' : 'Smile' }] }] }] });
+  const model = () => ({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', motionGroup: 'llas', expressionGroups: [{ type: 'eye', states: [{ name: revision === 1 ? 'Sad' : 'Smile' }] }] }] });
   const axios = {
     async get(url) {
       if (url.endsWith('webgal-engine.json')) return { data: { id: 'webgal-lovelive.lovelive' } };
       modelReads++;
+      if (url.includes('/runtime/')) return { data: { components: [{ type: 'garupa-expression-adapter', motionGroup: 'llas' }] } };
       return { data: model() };
     },
     async post() {
@@ -313,17 +318,23 @@ test('glTF dropdowns receive latest lists, unchanged refresh avoids reload, fail
   selectors = nodes(tree, 'SearchableCascader');
   assert.deepEqual([...selectors[0].props.optionList], ['extra/new', 'hasunosora/drag']);
   assert.equal(selectors[0].props.optionDescriptions.get('hasunosora/drag'), '被拉走');
-  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Sad']);
   assert.equal(refreshes, 0, 'catalog changes update options without reloading the running preview');
   revision = 3;
   nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
-  assert.equal(modelReads, readsBefore + 2, 'new revision reloads model-owned states even when catalog entries are unchanged');
+  assert.equal(modelReads, readsBefore, 'motion metadata revisions do not reload the model or its adapters');
   fail = true;
   nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();
-  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Smile']);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.native.eyes], ['Sad']);
   fail = false;
+  revision = 4;
+  nodes(tree, 'SearchableCascader')[0].props.onOpen();
+  tree = await settle();
+  assert.equal(modelReads, readsBefore + 2, 'new runtime registration reloads model and adapter configuration');
+  assert.equal(nodes(tree, 'GltfExpressionPicker')[0].props.supportsLive2D, true);
+  assert.deepEqual([...nodes(tree, 'GltfExpressionPicker')[0].props.live2d], ['anon/smile01']);
   enabled = false;
   nodes(tree, 'GltfExpressionPicker')[0].props.onOpen();
   tree = await settle();

@@ -239,8 +239,11 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
 
   // 载入 motions / expressions（支持 .jsonl / .json / spine / .wmdl）
   const loadedFigure = useRef<string | null>(null);
-  const selectedGltfCatalog = useMemo(() => isGltfConfigPath(figureFile.value) ? gltfCatalog : null,
-    [figureFile.value, gltfCatalog.revision, gltfCatalog.enabled]);
+  const adapterRegistryKey = JSON.stringify(gltfCatalog.resources
+    .filter(entry => entry.type === 'garupa-expression-adapter')
+    .sort((a, b) => a.config.localeCompare(b.config) || a.name.localeCompare(b.name)));
+  const selectedAdapterRegistryKey = isGltfConfigPath(figureFile.value) ? adapterRegistryKey : '';
+  const selectedGltfEnabled = isGltfConfigPath(figureFile.value) && gltfCatalog.enabled;
   useEffect(() => {
     const controller = new AbortController();
     const requestOptions = { signal: controller.signal };
@@ -275,7 +278,7 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           throw error;
         }).then(async response => {
           if (controller.signal.aborted) return;
-          const modelOptions = gltfFigureOptions(response.data, gltfCatalog.resources);
+          const modelOptions = gltfFigureOptions(response.data, []);
           if (!modelOptions) {
             setIsConfigLive2D(!!response.data?.motions || !!response.data?.FileReferences);
             setL2dMotionsList(Object.keys(response.data?.motions ?? {}));
@@ -284,10 +287,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           }
           setIsGltfFormat(true);
           setSupportsLive2DExpressions(false);
-          setL2dMotionsList(modelOptions.motions);
-          setL2dExpressionsList(modelOptions.expressions);
           setNativeExpressions(modelOptions.nativeExpressions);
-          const adapterPaths = [...new Set(gltfCatalog.resources.filter(entry => entry.type === 'garupa-expression-adapter').map(entry => entry.config))];
+          const adapters: { config: string }[] = JSON.parse(selectedAdapterRegistryKey);
+          const adapterPaths = [...new Set(adapters.map(entry => entry.config))];
           const catalogUrl = new URL(`/games/${encodeURIComponent(gameDir)}/game/`, window.location.origin);
           const adapterConfigs = await Promise.all(adapterPaths.map(path => axios.get(new URL(path, catalogUrl).href, requestOptions)
             .then(response => response.data).catch(error => {
@@ -295,11 +297,9 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
               return null;
             })));
           if (controller.signal.aborted) return;
-          const options = gltfFigureOptions(response.data, gltfCatalog.resources, adapterConfigs);
+          const options = gltfFigureOptions(response.data, [], adapterConfigs);
           if (!options) return;
           setSupportsLive2DExpressions(options.supportsLive2DExpressions);
-          setL2dMotionsList(options.motions);
-          setL2dExpressionsList(options.expressions);
           setNativeExpressions(options.nativeExpressions);
           setExpressionOptionsReady(true);
         }).catch(error => { if (!controller.signal.aborted) console.warn('glTF figure could not be read:', error); });
@@ -409,7 +409,15 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       }).catch(error => { if (!controller.signal.aborted) console.warn('WMDL could not be read:', error); });
     }
     return cleanup;
-  }, [figureFile.value, gameDir, selectedGltfCatalog]);
+  }, [figureFile.value, gameDir, selectedGltfEnabled, selectedAdapterRegistryKey]);
+
+  useEffect(() => {
+    if (!isGltfFormat) return;
+    const names = (types: string[]) => [...new Set(gltfCatalog.resources
+      .filter(entry => types.includes(entry.type)).map(entry => entry.name))].sort((a, b) => a.localeCompare(b));
+    setL2dMotionsList(names(['motion', 'garupa-motion']));
+    setL2dExpressionsList(supportsLive2DExpressions ? names(['garupa-expression']) : []);
+  }, [isGltfFormat, supportsLive2DExpressions, gltfCatalog.resources]);
 
   useEffect(() => {
     /**

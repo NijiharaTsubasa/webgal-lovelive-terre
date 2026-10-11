@@ -330,7 +330,7 @@ export class ManageGameService {
     ejectPlatform: 'web' | 'electron-windows' | 'android',
   ): Promise<boolean> {
     try {
-      await this.gltfIndex.ensureGltfCatalog(gameName);
+      await this.gltfIndex.prepareGltfExport(gameName);
       // 检查是否使用了衍生版本
       const gameRootDir = `/public/games/${gameName}/`;
       const checkIsEngineTemplateExist = async () => {

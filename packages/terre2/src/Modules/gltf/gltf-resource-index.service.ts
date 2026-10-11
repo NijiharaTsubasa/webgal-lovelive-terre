@@ -1,7 +1,9 @@
 import { ConsoleLogger, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { isAbsolute, relative, resolve, sep } from 'path';
+import { isAbsolute, join, relative, resolve, sep } from 'path';
 import { UserDataService } from '../user-data/user-data.service';
 import { GltfCatalogWorkerClient } from './gltf-catalog-worker-client';
+import { gltfEnabled } from './gltf-files';
+import { scanGltfRuntimes } from './gltf-runtime-registry';
 
 @Injectable()
 export class GltfResourceIndexService implements OnModuleDestroy {
@@ -11,7 +13,6 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   private catalogRoot?: string;
   private catalogOpening?: Promise<GltfCatalogWorkerClient>;
   private catalogSessions = new Map<string, Map<string, number>>();
-  private catalogPins = new Map<string, number>();
   private catalogIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private catalogSuspensions = new Map<string, number>();
   private catalogSessionTimer?: ReturnType<typeof setInterval>;
@@ -53,10 +54,10 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   }
 
   private releaseUnusedCatalog(gameName: string) {
-    if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName) || this.catalogIdleTimers.has(gameName)) return;
+    if (this.catalogSessions.get(gameName)?.size || this.catalogIdleTimers.has(gameName)) return;
     const timer = setTimeout(() => {
       this.catalogIdleTimers.delete(gameName);
-      if (this.catalogSessions.get(gameName)?.size || this.catalogPins.get(gameName)) return;
+      if (this.catalogSessions.get(gameName)?.size) return;
       const index = this.catalogIndexes.get(gameName);
       this.catalogIndexes.delete(gameName);
       this.catalogSessions.delete(gameName);
@@ -133,7 +134,6 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
     this.catalogIndexes.clear();
     this.catalogSessions.clear();
-    this.catalogPins.clear();
     this.catalogSnapshots.clear();
     this.catalogEpochs.clear();
   }
@@ -146,21 +146,12 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     this.catalogIndexes.get(gameName)?.setRuntimes(runtime);
   }
 
-  async ensureGltfCatalog(gameName: string) {
-    this.catalogPins.set(gameName, (this.catalogPins.get(gameName) ?? 0) + 1);
-    const timer = this.catalogIdleTimers.get(gameName);
-    if (timer) clearTimeout(timer);
-    this.catalogIdleTimers.delete(gameName);
-    try {
-      const index = await this.getCatalogIndex(gameName);
-      if (!index) throw new Error('正在复制工程资源，请稍后重试导出');
-      return await index.settled();
-    } finally {
-      const count = (this.catalogPins.get(gameName) ?? 1) - 1;
-      if (count) this.catalogPins.set(gameName, count);
-      else this.catalogPins.delete(gameName);
-      this.releaseUnusedCatalog(gameName);
-    }
+  async prepareGltfExport(gameName: string) {
+    if (this.catalogSuspensions.get(gameName)) throw new Error('正在复制工程资源，请稍后重试导出');
+    const gameRoot = join(UserDataService.getGameRoot(), gameName);
+    if (!await gltfEnabled(gameRoot, UserDataService.getEngineTemplateRoot())) return;
+    const runtime = await scanGltfRuntimes(gameRoot);
+    this.updateGltfRuntimes(gameName, runtime);
   }
 
   async notifyFile(path: string) {

@@ -38,16 +38,13 @@ describe('GltfCatalogWorkerClient', () => {
     await background.close();
   });
 
-  it('posts notifications before a settled request and waits only in settled()', async () => {
+  it('posts notifications without waiting for discovery to complete', async () => {
     const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     background.notify('games/test/game/3d/motion/new.motionbin');
-    const complete = background.settled();
     expect(
       worker.postMessage.mock.calls.map(([message]) => message.type),
-    ).toEqual(['notify', 'settled']);
-    const requestId = worker.postMessage.mock.calls[1][0].requestId;
+    ).toEqual(['notify']);
     worker.emit('message', {
-      requestId,
       snapshot: {
         enabled: true,
         resources: [],
@@ -56,7 +53,7 @@ describe('GltfCatalogWorkerClient', () => {
         indexing: false,
       },
     });
-    await expect(complete).resolves.toMatchObject({
+    expect(background.snapshot()).toMatchObject({
       revision: 2,
       indexing: false,
     });
@@ -71,18 +68,16 @@ describe('GltfCatalogWorkerClient', () => {
     await background.close();
   });
 
-  it('cancels pending initialization requests when its project closes', async () => {
+  it('stops observation when its project closes', async () => {
     const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
-    const complete = background.settled();
-    const rejected = expect(complete).rejects.toThrow('closed');
+    background.start();
     await background.close();
-    await rejected;
     expect(worker.terminate).toHaveBeenCalledTimes(1);
     background.start();
     expect(Worker).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps snapshots readable after a worker error and rejects export waits', async () => {
+  it('keeps snapshots readable after a worker error', async () => {
     const report = jest.fn();
     const background = new GltfCatalogWorkerClient(
       'games',
@@ -90,20 +85,17 @@ describe('GltfCatalogWorkerClient', () => {
       'test',
       report,
     );
-    const complete = background.settled();
-    const rejected = expect(complete).rejects.toThrow('failed');
+    background.start();
     worker.emit('error', new Error('failed'));
-    await rejected;
     expect(background.snapshot()).toMatchObject({
       indexing: false,
       error: 'failed',
     });
-    await expect(background.settled()).rejects.toThrow('failed');
     expect(report).toHaveBeenCalledTimes(1);
     await background.close();
   });
 
-  it('reports recoverable watch warnings without poisoning pending requests', async () => {
+  it('reports recoverable watch warnings without poisoning snapshots', async () => {
     const report = jest.fn();
     const background = new GltfCatalogWorkerClient(
       'games',
@@ -127,7 +119,7 @@ describe('GltfCatalogWorkerClient', () => {
     await background.close();
   });
 
-  it('rejects pending requests if message delivery fails', async () => {
+  it('reports failed notification delivery through its snapshot', async () => {
     const report = jest.fn();
     const background = new GltfCatalogWorkerClient(
       'games',
@@ -139,7 +131,7 @@ describe('GltfCatalogWorkerClient', () => {
     worker.postMessage.mockImplementation(() => {
       throw new Error('delivery failed');
     });
-    await expect(background.settled()).rejects.toThrow('delivery failed');
+    background.notify('games/test/game/3d/motion/new.motionbin');
     expect(background.snapshot()).toMatchObject({
       indexing: false,
       error: 'delivery failed',
@@ -160,8 +152,20 @@ describe('GltfCatalogWorkerClient', () => {
     );
     expect(background.snapshot().error).toBe('startup failed');
     background.snapshot();
-    await expect(background.settled()).rejects.toThrow('startup failed');
     expect(Worker).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledTimes(1);
+    await background.close();
+  });
+
+  it('reports runtime update delivery failures without throwing into export or model selection', async () => {
+    const report = jest.fn();
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test', report);
+    background.start();
+    worker.postMessage.mockImplementation(() => { throw new Error('delivery failed'); });
+    expect(() => background.setRuntimes({ resources: [], issues: [] })).not.toThrow();
+    expect(background.snapshot().error).toBe('delivery failed');
+    background.setRuntimes({ resources: [], issues: [] });
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
     expect(report).toHaveBeenCalledTimes(1);
     await background.close();
   });
