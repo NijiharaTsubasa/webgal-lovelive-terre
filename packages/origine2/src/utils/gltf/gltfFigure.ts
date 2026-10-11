@@ -64,27 +64,37 @@ export function gltfFigureOptions(config: unknown, resources: GltfResourceEntry[
   };
 }
 
-export interface NativeExpressionSelection { eye?: string; closed?: string; open?: string }
+export interface NativeExpressionSelection { face?: string; eye?: string; closed?: string; open?: string }
 export interface NativeExpressionOptions {
+  faces?: string[];
   eyes: string[];
   mouths: string[];
+  mouthDefaults?: Record<string, { closed: string; open: string }>;
   defaults: NativeExpressionSelection;
 }
 export function nativeExpressionOptions(model: { expressionGroups?: any[]; defaultExpression?: NativeExpressionSelection }): NativeExpressionOptions {
   const groups = Array.isArray(model.expressionGroups) ? model.expressionGroups : [];
   const names = (type: string) => (groups.find(group => group.type === type)?.states ?? [])
     .map((state: { name: string }) => state.name);
-  const eyes = names('eye'), mouths = names('mouth');
-  return { eyes, mouths, defaults: model.defaultExpression ?? {
-    ...(eyes.length ? { eye: eyes[0] } : {}), ...(mouths.length ? { closed: mouths[0], open: mouths[0] } : {}),
+  const faces = names('face'), eyes = names('eye'), mouths = names('mouth');
+  const mouthDefaults = Object.fromEntries((groups.find(group => group.type === 'eye')?.states ?? [])
+    .filter((state: any) => state.mouth).map((state: any) => [state.name, state.mouth]));
+  return { ...(faces.length ? { faces } : {}), eyes, mouths,
+    ...(Object.keys(mouthDefaults).length ? { mouthDefaults } : {}), defaults: model.defaultExpression ?? {
+    ...(faces.length ? { face: faces[0] } : {}),
+    ...(eyes.length ? { eye: eyes[0] } : {}), ...(mouths.length ? mouthDefaults[eyes[0]] ?? { closed: mouths[0], open: mouths[0] } : {}),
   } };
 }
 export function encodeNativeExpression(selection: NativeExpressionSelection): string {
+  if (selection.face !== undefined) return `3d:face/${encodeURIComponent(selection.face)}`;
   return `3d:${[selection.eye, selection.closed, selection.open].map(name => encodeURIComponent(name ?? '')).join('/')}`;
 }
 export function decodeNativeExpression(value: string): NativeExpressionSelection | null {
   if (!value.startsWith('3d:')) return null;
   const parts = value.slice(3).split('/');
+  if (parts.length === 2 && parts[0] === 'face') {
+    try { return parts[1] ? { face: decodeURIComponent(parts[1]) } : null; } catch { return null; }
+  }
   if (parts.length !== 3) return null;
   try {
     const [eye, closed, open] = parts.map(decodeURIComponent);

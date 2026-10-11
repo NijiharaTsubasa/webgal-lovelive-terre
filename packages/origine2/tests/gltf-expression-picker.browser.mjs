@@ -53,17 +53,20 @@ const bundle = await build({
 });
 const javascript = bundle.outputFiles[0].text;
 const server = createServer((request, response) => {
-  if (request.url === '/fixture.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(javascript); }
-  else response.end(`<html><head><style>${styles.join('\n')}</style></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>`);
+  if (request.url === '/fixture.js') { response.setHeader('Content-Type', 'text/javascript; charset=utf-8'); response.end(javascript); }
+  else { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(`<html><head><style>${styles.join('\n')}</style></head><body><div id="root"></div><script src="/fixture.js"></script></body></html>`); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {}) });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => errors.push(error.stack || error.message));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.locator('#root button').first().waitFor({timeout:5000}).catch(error => {
+    throw new Error(`Picker fixture failed to render (${browser.version()}): ${errors.join('; ') || error.message}`);
+  });
   await page.getByRole('button', { name: '选择表情', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Live2D', exact: true }).count(), 1);
   assert.equal(await page.getByRole('combobox').count(), 1, 'unselected supported model opens Live2D');
@@ -86,6 +89,29 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Live2D', exact: true }).count(), 1);
   assert.equal(await page.getByRole('textbox', { name: '搜索3D张口' }).inputValue(), '', 'reopening resets search');
   assert.equal(await page.getByRole('button', { name: 'A', exact: true }).last().isEnabled(), true, 'saved selection reopens all three levels');
+  await page.locator('#outside').click();
+  await page.evaluate(() => window.configure({ supportsLive2D: false, native: {
+    faces: ['normal', 'happy/笑'], eyes: [], mouths: [], defaults: {face:'normal'},
+  } }));
+  await page.getByRole('button', {name:'选择表情',exact:true}).click();
+  assert.equal(await page.getByRole('textbox', {name:'搜索3D表情'}).count(), 1);
+  assert.equal(await page.getByRole('textbox', {name:'搜索3D眼型'}).count(), 0);
+  await page.getByRole('button', {name:'happy/笑',exact:true}).click();
+  assert.deepEqual(await page.evaluate(() => window.selected), ['3d:face/happy%2F%E7%AC%91']);
+  await page.getByRole('button', {name:'happy/笑',exact:true}).click();
+  assert.equal(await page.getByRole('button', {name:'happy/笑',exact:true}).last().getAttribute('disabled'), null);
+  await page.locator('#outside').click();
+  await page.evaluate(() => window.configure({ supportsLive2D: false, native: {
+    eyes:['Sad/左','Open'],mouths:['Smile','A'],defaults:{eye:'Open',closed:'A',open:'Smile'},
+    mouthDefaults:{'Sad/左':{closed:'Smile',open:'A'}},
+  } }));
+  await page.getByRole('button', {name:'选择表情',exact:true}).click();
+  await page.getByRole('button', {name:'Sad/左',exact:true}).click();
+  assert.equal(await page.getByRole('button', {name:'Smile',exact:true}).first().getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('button', {name:'A',exact:true}).last().getAttribute('aria-pressed'), 'true');
+  await page.getByRole('button', {name:'Smile',exact:true}).first().click();
+  await page.getByRole('button', {name:'A',exact:true}).last().click();
+  assert.deepEqual(await page.evaluate(() => window.selected), ['3d:Sad%2F%E5%B7%A6/Smile/A']);
   await page.locator('#outside').click();
   await page.evaluate(() => window.configure({}));
   await page.getByRole('button', { name: '选择表情', exact: true }).click();

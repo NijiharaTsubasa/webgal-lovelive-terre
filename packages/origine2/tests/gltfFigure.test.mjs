@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { gltfFigureOptions, isGltfConfigPath, encodeNativeExpression, decodeNativeExpression } from '../src/utils/gltf/gltfFigure.ts';
+import { gltfFigureOptions, isGltfConfigPath, encodeNativeExpression, decodeNativeExpression, nativeExpressionOptions } from '../src/utils/gltf/gltfFigure.ts';
 
 test('config paths are recognizable without scanning a resource catalog', () => {
   assert.equal(isGltfConfigPath('nested/config.json'), true);
@@ -54,4 +54,25 @@ test('native combination encoding preserves separator-bearing names and absent s
   assert.equal(encodeNativeExpression({ eye: 'Open' }), '3d:Open//');
   assert.deepEqual(decodeNativeExpression('3d:Open//'), { eye: 'Open' });
   for (const value of ['anon/angry', '3d:x/y', '3d:%/a/b']) assert.equal(decodeNativeExpression(value), null);
+});
+
+test('whole-face selection preserves names and keeps independent selections unambiguous', () => {
+  assert.equal(encodeNativeExpression({ face: 'happy/笑' }), '3d:face/happy%2F%E7%AC%91');
+  assert.deepEqual(decodeNativeExpression('3d:face/happy%2F%E7%AC%91'), { face: 'happy/笑' });
+  assert.deepEqual(decodeNativeExpression('3d:face/closed/open'), { eye: 'face', closed: 'closed', open: 'open' });
+  assert.equal(decodeNativeExpression('3d:face/'), null);
+  assert.equal(decodeNativeExpression('3d:face/%'), null);
+  assert.deepEqual(nativeExpressionOptions({ expressionGroups: [{ type: 'face', states: [{ name: 'normal' }, { name: 'happy' }] }] }),
+    { faces: ['normal', 'happy'], eyes: [], mouths: [], defaults: { face: 'normal' } });
+});
+
+test('eye-owned mouth references initialize defaults while an explicit combination stays authoritative', () => {
+  const expressionGroups = [
+    { type: 'eye', states: [{ name: 'normal', mouth: { closed: 'neutral/close', open: 'neutral/a' } }] },
+    { type: 'mouth', states: [{ name: 'other' }, { name: 'neutral/close' }, { name: 'neutral/a' }] },
+  ];
+  assert.deepEqual(nativeExpressionOptions({ expressionGroups }).defaults,
+    { eye: 'normal', closed: 'neutral/close', open: 'neutral/a' });
+  const defaults = { eye: 'normal', closed: 'other', open: 'other' };
+  assert.deepEqual(nativeExpressionOptions({ expressionGroups, defaultExpression: defaults }).defaults, defaults);
 });
