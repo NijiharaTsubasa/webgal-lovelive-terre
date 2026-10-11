@@ -13,6 +13,8 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   private catalogRoot?: string;
   private catalogOpening?: Promise<GltfCatalogWorkerClient>;
   private catalogSessions = new Map<string, Map<string, number>>();
+  private catalogReads = new Map<string, number>();
+  private catalogClosing = new Map<string, Promise<void>>();
   private catalogIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private catalogSuspensions = new Map<string, number>();
   private catalogSessionTimer?: ReturnType<typeof setInterval>;
@@ -41,6 +43,7 @@ export class GltfResourceIndexService implements OnModuleDestroy {
       await this.getCatalogIndex(gameName);
     } else {
       sessions.delete(sessionId);
+      if (!sessions.size) this.catalogReads.delete(gameName);
       this.releaseUnusedCatalog(gameName);
     }
     return { ok: true };
@@ -58,20 +61,33 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     const timer = setTimeout(() => {
       this.catalogIdleTimers.delete(gameName);
       if (this.catalogSessions.get(gameName)?.size) return;
+      if ((this.catalogReads.get(gameName) ?? -Infinity) + 30000 > Date.now()) {
+        this.releaseUnusedCatalog(gameName);
+        return;
+      }
       const index = this.catalogIndexes.get(gameName);
       this.catalogIndexes.delete(gameName);
       this.catalogSessions.delete(gameName);
+      this.catalogReads.delete(gameName);
       if (index) {
         this.catalogSnapshots.set(gameName, this.catalogSnapshot(gameName, index));
-        void index.close().catch(error => this.logger.warn(`glTF 索引关闭失败: ${error.message}`));
+        void this.closeCatalog(gameName, index).catch(error => this.logger.warn(`glTF 索引关闭失败: ${error.message}`));
       }
       if (!this.catalogSessions.size && this.catalogSessionTimer) {
         clearInterval(this.catalogSessionTimer);
         this.catalogSessionTimer = undefined;
       }
-    }, 10000);
+    }, Math.max(10000, (this.catalogReads.get(gameName) ?? -Infinity) + 30000 - Date.now()));
     timer.unref();
     this.catalogIdleTimers.set(gameName, timer);
+  }
+
+  private closeCatalog(gameName: string, index: GltfCatalogWorkerClient) {
+    const closing = Promise.resolve().then(() => index.close()).finally(() => {
+      if (this.catalogClosing.get(gameName) === closing) this.catalogClosing.delete(gameName);
+    });
+    this.catalogClosing.set(gameName, closing);
+    return closing;
   }
 
   private catalogSnapshot(gameName: string, index?: GltfCatalogWorkerClient) {
@@ -94,6 +110,8 @@ export class GltfResourceIndexService implements OnModuleDestroy {
 
   private async getCatalogIndex(gameName: string) {
     if (this.catalogSuspensions.get(gameName)) return undefined;
+    // Keep snapshot requests responsive, but never overlap two workers for one project.
+    if (this.catalogClosing.has(gameName)) return undefined;
     const root = UserDataService.getGameRoot();
     if (this.catalogOpening) {
       await this.catalogOpening;
@@ -132,14 +150,22 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     for (const timer of this.catalogIdleTimers.values()) clearTimeout(timer);
     this.catalogIdleTimers.clear();
     await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
+    await Promise.all([...this.catalogClosing.values()]);
     this.catalogIndexes.clear();
     this.catalogSessions.clear();
+    this.catalogReads.clear();
     this.catalogSnapshots.clear();
     this.catalogEpochs.clear();
   }
 
   async getGltfCatalog(gameName: string) {
-    return this.catalogSnapshot(gameName, await this.getCatalogIndex(gameName));
+    this.catalogReads.set(gameName, Date.now());
+    const timer = this.catalogIdleTimers.get(gameName);
+    if (timer) clearTimeout(timer);
+    this.catalogIdleTimers.delete(gameName);
+    const index = await this.getCatalogIndex(gameName);
+    this.releaseUnusedCatalog(gameName);
+    return this.catalogSnapshot(gameName, index);
   }
 
   updateGltfRuntimes(gameName: string, runtime: Parameters<GltfCatalogWorkerClient['setRuntimes']>[0]) {
@@ -197,8 +223,9 @@ export class GltfResourceIndexService implements OnModuleDestroy {
         if (index) {
           this.catalogSnapshots.set(name, this.catalogSnapshot(name, index));
           this.catalogIndexes.delete(name);
-          await index.close();
+          await this.closeCatalog(name, index);
         }
+        else if (this.catalogClosing.has(name)) await this.catalogClosing.get(name);
       }));
       return await operation();
     } finally {

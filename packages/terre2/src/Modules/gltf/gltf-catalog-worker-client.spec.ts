@@ -9,7 +9,10 @@ describe('GltfCatalogWorkerClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     worker = Object.assign(new EventEmitter(), {
-      postMessage: jest.fn(),
+      postMessage: jest.fn((message) => {
+        if (message.type === 'close')
+          queueMicrotask(() => worker.emit('message', { type: 'closed' }));
+      }),
       terminate: jest.fn().mockResolvedValue(0),
     });
     (Worker as unknown as jest.Mock).mockImplementation(() => worker);
@@ -26,7 +29,11 @@ describe('GltfCatalogWorkerClient', () => {
       snapshot: {
         enabled: true,
         resources: [
-          { type: 'motion', name: 'new.motionbin', config: '3d/motion/new.motionbin' },
+          {
+            type: 'motion',
+            name: 'new.motionbin',
+            config: '3d/motion/new.motionbin',
+          },
         ],
         issues: [],
         revision: 1,
@@ -61,9 +68,17 @@ describe('GltfCatalogWorkerClient', () => {
   });
   it('reuses an explicit runtime refresh result instead of issuing a filesystem notification', async () => {
     const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
-    const runtime = { resources: [{ type: 'shader', name: 'Eye', config: '3d/runtime/deps/config.json' }], issues: [] };
+    const runtime = {
+      resources: [
+        { type: 'shader', name: 'Eye', config: '3d/runtime/deps/config.json' },
+      ],
+      issues: [],
+    };
     background.setRuntimes(runtime);
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'runtime', runtime });
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: 'runtime',
+      runtime,
+    });
     expect(worker.postMessage).toHaveBeenCalledTimes(1);
     await background.close();
   });
@@ -75,6 +90,59 @@ describe('GltfCatalogWorkerClient', () => {
     expect(worker.terminate).toHaveBeenCalledTimes(1);
     background.start();
     expect(Worker).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains file operations before termination and shares concurrent close requests', async () => {
+    worker.postMessage.mockImplementation(() => {});
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
+    background.start();
+    const first = background.close(),
+      second = background.close();
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'close' });
+    expect(worker.terminate).not.toHaveBeenCalled();
+    worker.emit('message', { type: 'closed' });
+    await Promise.all([first, second]);
+    expect(worker.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows slow native file cleanup and bounds an unresponsive shutdown', async () => {
+    jest.useFakeTimers();
+    try {
+      worker.postMessage.mockImplementation(() => {});
+      const report = jest.fn();
+      const background = new GltfCatalogWorkerClient(
+        'games',
+        'engine',
+        'test',
+        report,
+      );
+      background.start();
+      const closing = background.close();
+      await jest.advanceTimersByTimeAsync(4000);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(6000);
+      await closing;
+      expect(worker.terminate).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('关闭等待超时'),
+        }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not wait for a shutdown acknowledgement from an already exited worker', async () => {
+    worker.postMessage.mockImplementation(() => {});
+    const report = jest.fn();
+    const background = new GltfCatalogWorkerClient('games', 'engine', 'test', report);
+    background.start();
+    worker.emit('exit', 1);
+    await background.close();
+    expect(worker.postMessage).not.toHaveBeenCalled();
+    expect(worker.terminate).not.toHaveBeenCalled();
+    expect(report).toHaveBeenCalledTimes(1);
   });
 
   it('keeps snapshots readable after a worker error', async () => {
@@ -112,9 +180,18 @@ describe('GltfCatalogWorkerClient', () => {
 
   it('forwards background read progress to the application logger', async () => {
     const progress = jest.fn();
-    const background = new GltfCatalogWorkerClient('games', 'engine', 'test', () => {}, progress);
+    const background = new GltfCatalogWorkerClient(
+      'games',
+      'engine',
+      'test',
+      () => {},
+      progress,
+    );
     background.start();
-    worker.emit('message', { type: 'progress', message: 'glTF 动作说明读取: 12/2000, 等待 first.motionbin (打开文件)' });
+    worker.emit('message', {
+      type: 'progress',
+      message: 'glTF 动作说明读取: 12/2000, 等待 first.motionbin (打开文件)',
+    });
     expect(progress).toHaveBeenCalledWith(expect.stringContaining('打开文件'));
     await background.close();
   });
@@ -159,10 +236,19 @@ describe('GltfCatalogWorkerClient', () => {
 
   it('reports runtime update delivery failures without throwing into export or model selection', async () => {
     const report = jest.fn();
-    const background = new GltfCatalogWorkerClient('games', 'engine', 'test', report);
+    const background = new GltfCatalogWorkerClient(
+      'games',
+      'engine',
+      'test',
+      report,
+    );
     background.start();
-    worker.postMessage.mockImplementation(() => { throw new Error('delivery failed'); });
-    expect(() => background.setRuntimes({ resources: [], issues: [] })).not.toThrow();
+    worker.postMessage.mockImplementation(() => {
+      throw new Error('delivery failed');
+    });
+    expect(() =>
+      background.setRuntimes({ resources: [], issues: [] }),
+    ).not.toThrow();
     expect(background.snapshot().error).toBe('delivery failed');
     background.setRuntimes({ resources: [], issues: [] });
     expect(worker.postMessage).toHaveBeenCalledTimes(1);
@@ -178,7 +264,11 @@ describe('GltfCatalogWorkerClient', () => {
       snapshot: {
         enabled: true,
         resources: [
-          { type: 'shader', name: 'runtime', config: '3d/runtime/deps/config.json' },
+          {
+            type: 'shader',
+            name: 'runtime',
+            config: '3d/runtime/deps/config.json',
+          },
         ],
         issues: [],
         revision: 0,

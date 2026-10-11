@@ -6,7 +6,8 @@ import { scanGltfRuntimes } from './gltf-runtime-registry';
 import type { GltfCatalogSnapshot } from './gltf-catalog-worker-client';
 
 const { root, engineRoot, gameName } = workerData;
-const post = (message: any) => parentPort.postMessage(message);
+let closing = false;
+const post = (message: any) => { if (!closing) parentPort.postMessage(message); };
 const failure = (error: Error) => post({ type: 'error', error: error.message });
 let initialSnapshot: GltfCatalogSnapshot;
 let lastWarning = 0;
@@ -73,6 +74,7 @@ async function bootstrap() {
   if (snapshot.enabled) {
     // Runtime registration must be ready before large motion discovery begins.
     const runtime = await scanGltfRuntimes(gameRoot);
+    if (closing) return;
     initialSnapshot = { ...snapshot, ...runtime, revision: 0 };
     post({ type: 'snapshot', snapshot: initialSnapshot });
     index.setRuntimes(runtime);
@@ -101,6 +103,17 @@ async function flushNotifications() {
   }
 }
 parentPort.on('message', (message) => {
+  if (closing) return;
+  if (message.type === 'close') {
+    closing = true;
+    clearTimeout(notificationTimer);
+    pendingPaths.clear();
+    // This must interrupt bootstrap rather than queue behind its file reads.
+    void Promise.allSettled([index.close(), operations]).finally(() => {
+      parentPort.postMessage({type:'closed'});
+    });
+    return;
+  }
   if (message.type === 'notify') {
     pendingPaths.add(message.path);
     clearTimeout(notificationTimer);
@@ -110,6 +123,7 @@ parentPort.on('message', (message) => {
     return;
   }
   operations = operations.then(async () => {
+    if (closing) return;
     try {
       if (message.type === 'runtime') {
         index.setRuntimes(message.runtime);

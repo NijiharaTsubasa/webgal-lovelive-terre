@@ -170,6 +170,45 @@ describe('WebgalFsService', () => {
     } finally { jest.useRealTimers(); }
   });
 
+  it('keeps an actively queried catalog alive when browser session heartbeats are throttled', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+      const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
+      await index.gltfCatalogSession('demo', 'tab', true);
+      const original = (index as any).catalogIndexes.get('demo');
+      for (let i = 0; i < 24; i++) {
+        await jest.advanceTimersByTimeAsync(5000);
+        await index.getGltfCatalog('demo');
+      }
+      expect(close).not.toHaveBeenCalled();
+      expect((index as any).catalogIndexes.get('demo')).toBe(original);
+      await jest.advanceTimersByTimeAsync(45000);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not start a replacement while the previous catalog worker is still closing', async () => {
+    jest.useFakeTimers();
+    let finish: () => void;
+    try {
+      const start = jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue()
+        .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await index.gltfCatalogSession('demo', 'tab', true);
+      await index.gltfCatalogSession('demo', 'tab', false);
+      await jest.advanceTimersByTimeAsync(10000);
+      const count = start.mock.calls.length;
+      await index.gltfCatalogSession('demo', 'new-tab', true);
+      await index.getGltfCatalog('demo');
+      expect(start.mock.calls.length).toBe(count);
+      finish();
+      await Promise.resolve(); await Promise.resolve();
+      await index.getGltfCatalog('demo');
+      expect((index as any).catalogIndexes.size).toBe(1);
+    } finally { finish?.(); jest.useRealTimers(); }
+  });
+
   it('suspends an open index throughout copying and restarts it only after the copy ends', async () => {
     jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
     const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();

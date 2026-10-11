@@ -18,6 +18,8 @@ export class GltfCatalogWorkerClient {
   private worker?: Worker;
   private started = false;
   private closed = false;
+  private closing?: Promise<void>;
+  private drained?: () => void;
   private latest: GltfCatalogSnapshot = {
     enabled: true,
     resources: [],
@@ -66,6 +68,10 @@ export class GltfCatalogWorkerClient {
           : {}),
       });
       this.worker.on('message', (message) => {
+        if (message.type === 'closed') {
+          this.drained?.();
+          return;
+        }
         if (this.closed) return;
         if (message.snapshot) this.latest = message.snapshot;
         if (message.type === 'progress') this.reportProgress(message.message);
@@ -74,6 +80,8 @@ export class GltfCatalogWorkerClient {
       });
       this.worker.on('error', (error) => this.fail(error));
       this.worker.on('exit', (code) => {
+        this.worker = undefined;
+        this.drained?.();
         if (!this.closed && !this.latest.error)
           this.fail(new Error(`glTF resource index worker exited (${code})`));
       });
@@ -117,8 +125,36 @@ export class GltfCatalogWorkerClient {
   }
 
   async close() {
+    if (this.closing) return this.closing;
     this.closed = true;
-    await this.worker?.terminate();
-    this.worker = undefined;
+    const worker = this.worker;
+    if (!worker) return;
+    this.closing = (async () => {
+      // Cancellation drains opened files and native watchers before the thread exits.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          this.report(
+            new Error(
+              `glTF 索引关闭等待超时: ${this.gameName}，将终止索引线程`,
+            ),
+          );
+          resolve();
+        }, 10000);
+        timer.unref();
+        this.drained = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        try {
+          worker.postMessage({ type: 'close' });
+        } catch {
+          this.drained();
+        }
+      });
+      await worker.terminate();
+      this.worker = undefined;
+      this.drained = undefined;
+    })();
+    return this.closing;
   }
 }

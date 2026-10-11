@@ -239,6 +239,36 @@ describe('fixed glTF resource directories', () => {
     }
     expect((await reading).resources).toHaveLength(2);
   });
+  it('drains every outstanding header reader before reporting cancellation', async () => {
+    const files = [];
+    for (let i = 0; i < 4; i++) {
+      const name = `game/3d/motion/cancel${i}.motionbin`;
+      await motion(name); files.push(join(root, name));
+    }
+    const inventory: CatalogInventory = { files: new Set(files) };
+    const releases: (() => void)[] = [];
+    let opened: () => void;
+    const allOpened = new Promise<void>(resolve => { opened = resolve; });
+    const original = fs.open;
+    jest.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      await new Promise<void>(resolve => {
+        releases.push(resolve);
+        if (releases.length === 4) opened();
+      });
+      return original(...args);
+    });
+    let settled = false;
+    const reading = readGltfMotionCatalog(root, undefined, inventory);
+    const result = reading.then(() => { settled = true; }, error => { settled = true; return error; });
+    await allOpened;
+    inventory.cancelled = true;
+    releases[0]();
+    // Let the first reader finish its real open/read/close sequence.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    try { expect(settled).toBe(false); }
+    finally { for (const release of releases) release(); }
+    expect((await result).message).toContain('closed');
+  });
   it('browses only current model directory and validates selected packages', async () => {
     const preview = 'data:image/webp;base64,ABC';
     await put('game/3d/figure/a/config.json', {

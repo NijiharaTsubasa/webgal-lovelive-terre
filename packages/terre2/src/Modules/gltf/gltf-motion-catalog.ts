@@ -160,7 +160,7 @@ export async function readGltfMotionCatalog(
         }, 10000)
       : undefined;
   try {
-    await Promise.all(
+    const readers = await Promise.allSettled(
       Array.from({ length: Math.min(4, headers.length) }, async () => {
         while (next < headers.length) {
           if (inventory?.cancelled)
@@ -195,6 +195,9 @@ export async function readGltfMotionCatalog(
         }
       }),
     );
+    // A cancelled reader can finish before its peers. Drain every open file
+    // before allowing the owner to report shutdown complete.
+    for (const result of readers) if (result.status === 'rejected') throw result.reason;
   } finally {
     if (timer) clearInterval(timer);
     if (publishTimer) clearTimeout(publishTimer);
