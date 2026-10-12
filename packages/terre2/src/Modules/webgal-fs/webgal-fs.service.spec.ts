@@ -151,7 +151,7 @@ describe('WebgalFsService', () => {
     expect(result).toMatchObject({ indexing: true, resources: [] });
   });
 
-  it('keeps an index until the last editor session leaves and reclaims expired sessions', async () => {
+  it('keeps an index until the last editor connection leaves', async () => {
     jest.useFakeTimers();
     try {
       jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
@@ -166,6 +166,9 @@ describe('WebgalFsService', () => {
       expect(close).toHaveBeenCalledTimes(1);
       await index.gltfCatalogSession('demo', 'lost-tab', true);
       await jest.advanceTimersByTimeAsync(45000);
+      expect(close).toHaveBeenCalledTimes(1);
+      await index.gltfCatalogSession('demo', 'lost-tab', false);
+      await jest.advanceTimersByTimeAsync(10000);
       expect(close).toHaveBeenCalledTimes(2);
     } finally { jest.useRealTimers(); }
   });
@@ -184,7 +187,26 @@ describe('WebgalFsService', () => {
       expect(close).not.toHaveBeenCalled();
       expect((index as any).catalogIndexes.get('demo')).toBe(original);
       await jest.advanceTimersByTimeAsync(45000);
+      expect(close).not.toHaveBeenCalled();
+      await index.gltfCatalogSession('demo', 'tab', false);
+      await jest.advanceTimersByTimeAsync(10000);
       expect(close).toHaveBeenCalledTimes(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not rebuild an open project when background browser timers run once per minute', async () => {
+    jest.useFakeTimers();
+    try {
+      jest.spyOn(GltfCatalogWorkerClient.prototype, 'start').mockImplementation(() => {});
+      const close = jest.spyOn(GltfCatalogWorkerClient.prototype, 'close').mockResolvedValue();
+      await index.gltfCatalogSession('demo', 'background-tab', true);
+      const original = (index as any).catalogIndexes.get('demo');
+      for (let i = 0; i < 3; i++) {
+        await jest.advanceTimersByTimeAsync(60000);
+        await index.gltfCatalogSession('demo', 'background-tab', true);
+      }
+      expect((index as any).catalogIndexes.get('demo')).toBe(original);
+      expect(close).not.toHaveBeenCalled();
     } finally { jest.useRealTimers(); }
   });
 
@@ -199,12 +221,11 @@ describe('WebgalFsService', () => {
       await index.gltfCatalogSession('demo', 'tab', false);
       await jest.advanceTimersByTimeAsync(10000);
       const count = start.mock.calls.length;
-      await index.gltfCatalogSession('demo', 'new-tab', true);
+      const reconnect = index.gltfCatalogSession('demo', 'new-tab', true);
       await index.getGltfCatalog('demo');
       expect(start.mock.calls.length).toBe(count);
       finish();
-      await Promise.resolve(); await Promise.resolve();
-      await index.getGltfCatalog('demo');
+      await reconnect;
       expect((index as any).catalogIndexes.size).toBe(1);
     } finally { finish?.(); jest.useRealTimers(); }
   });

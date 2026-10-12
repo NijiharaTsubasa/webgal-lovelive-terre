@@ -29,7 +29,11 @@ app.use(
   createProxyMiddleware("/api", {
     target: `http://localhost:${WEBGAL_PORT + 1}`, // http代理跨域目标接口
     changeOrigin: true,
-      ws:true
+    ws: true,
+    onProxyReq(proxyReq, req, res) {
+      if (req.url?.split('?')[0] === '/api/manageGame/gltfCatalogSession')
+        res.once('close', () => proxyReq.destroy());
+    },
   })
 );
 

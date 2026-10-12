@@ -1,4 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, MessageEvent } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { Observable } from 'rxjs';
 import { join, resolve } from 'path';
 import * as fs from 'fs/promises';
 import { UserDataService } from '../user-data/user-data.service';
@@ -30,12 +32,23 @@ export class GltfService {
     return result;
   }
 
-  async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
-    if (typeof gameName !== 'string' || !gameName || !checkFileName(gameName) || gameName === '.' || gameName === '..' ||
-        typeof sessionId !== 'string' || !sessionId.length || sessionId.length > 128 || typeof active !== 'boolean') {
-      throw new BadRequestException('Invalid catalog session');
-    }
-    return this.index.gltfCatalogSession(gameName, sessionId, active);
+  gltfCatalogSession(gameName: string): Observable<MessageEvent> {
+    this.gltfGameRoot(gameName);
+    return new Observable(subscriber => {
+      const sessionId = randomUUID();
+      // Server-side traffic keeps the stream alive without relying on background
+      // browser timers. Nest unsubscribes when the HTTP connection closes.
+      const timer = setInterval(() => subscriber.next({ data: { active: true } }), 15000);
+      timer.unref();
+      void this.index.gltfCatalogSession(gameName, sessionId, true)
+        .then(() => subscriber.next({ data: { active: true } }))
+        .catch(error => subscriber.error(error));
+      return () => {
+        clearInterval(timer);
+        void this.index.gltfCatalogSession(gameName, sessionId, false)
+          .catch(error => console.warn('glTF project session could not be released:', error));
+      };
+    });
   }
 
   private gltfGameRoot(gameName: string) {

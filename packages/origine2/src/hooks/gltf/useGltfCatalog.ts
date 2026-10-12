@@ -1,7 +1,6 @@
 import { useCallback, useEffect } from 'react';
 import axios from 'axios';
 import useSWR from 'swr';
-import { v4 as uuidv4 } from 'uuid';
 import { GltfCatalogResult } from '@/utils/gltf/gltfFigure';
 
 const EMPTY_CATALOG: GltfCatalogResult = { enabled: false, resources: [], revision: 0 };
@@ -48,29 +47,22 @@ export default function useGltfCatalog(game: string | undefined, monitor = false
 
 export function useGltfCatalogSession(game: string) {
   useEffect(() => {
-    const sessionId = uuidv4();
-    const body = { gameName: game, sessionId };
-    const controller = new AbortController();
-    const heartbeat = () => {
-      void axios.post('/api/manageGame/gltfCatalogSession', { ...body, active: true }, { signal: controller.signal })
-        .catch(error => { if (!controller.signal.aborted) console.warn('glTF project session could not be renewed:', error); });
+    let session: EventSource;
+    const connect = () => {
+      if (!session || session.readyState === EventSource.CLOSED)
+        session = new EventSource(`/api/manageGame/gltfCatalogSession?gameName=${encodeURIComponent(game)}`);
     };
     const release = () => {
-      // keepalive also reaches the backend when the browser tab is closing.
-      void fetch('/api/manageGame/gltfCatalogSession', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, active: false }), keepalive: true,
-      }).catch(() => {});
+      session?.close();
     };
-    heartbeat();
-    const timer = window.setInterval(heartbeat, 10000);
+    // Connection lifetime survives background timer throttling. EventSource
+    // reconnects after transport failures; pageshow restores a bfcache page.
+    connect();
     window.addEventListener('pagehide', release);
-    window.addEventListener('pageshow', heartbeat);
+    window.addEventListener('pageshow', connect);
     return () => {
-      window.clearInterval(timer);
-      controller.abort();
       window.removeEventListener('pagehide', release);
-      window.removeEventListener('pageshow', heartbeat);
+      window.removeEventListener('pageshow', connect);
       release();
     };
   }, [game]);

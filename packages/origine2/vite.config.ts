@@ -48,6 +48,12 @@ export default defineConfig({
         secure: true, // 如果是https接口，需要配置这个参数
         changeOrigin: true, // 如果接口跨域，需要进行这个参数配置
         ws:true,
+        configure(proxy) {
+          proxy.on('proxyReq', (request, incoming, response) => {
+            if (incoming.url?.split('?')[0] === '/api/manageGame/gltfCatalogSession')
+              response.once('close', () => request.destroy());
+          });
+        },
       },
       '/games': {
         target: `http://127.0.0.1:${WEBGAL_PORT + 1}`, // 接口的域名

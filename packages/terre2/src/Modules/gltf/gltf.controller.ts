@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Query, Sse } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { GltfService } from './gltf.service';
 
@@ -12,9 +12,9 @@ export class GltfController {
     return this.gltf.updateGltfResourceCatalog(data.gameName, data.revision);
   }
 
-  @Post('gltfCatalogSession')
-  async gltfCatalogSession(@Body() data: { gameName: string; sessionId: string; active: boolean }) {
-    return this.gltf.gltfCatalogSession(data.gameName, data.sessionId, data.active);
+  @Sse('gltfCatalogSession')
+  gltfCatalogSession(@Query('gameName') gameName: string) {
+    return this.gltf.gltfCatalogSession(gameName);
   }
 
   @Post('browseGltfModels')

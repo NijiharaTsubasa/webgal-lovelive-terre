@@ -12,12 +12,11 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   private catalogIndexes = new Map<string, GltfCatalogWorkerClient>();
   private catalogRoot?: string;
   private catalogOpening?: Promise<GltfCatalogWorkerClient>;
-  private catalogSessions = new Map<string, Map<string, number>>();
+  private catalogSessions = new Map<string, Set<string>>();
   private catalogReads = new Map<string, number>();
   private catalogClosing = new Map<string, Promise<void>>();
   private catalogIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private catalogSuspensions = new Map<string, number>();
-  private catalogSessionTimer?: ReturnType<typeof setInterval>;
   private catalogEpoch = 0;
   private catalogEpochs = new Map<string, { index: GltfCatalogWorkerClient; revision: number; value: number }>();
   private catalogSnapshots = new Map<string, any>();
@@ -28,32 +27,26 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     this.catalogRoot = root;
     let sessions = this.catalogSessions.get(gameName);
     if (!sessions) {
-      sessions = new Map();
+      sessions = new Set();
       this.catalogSessions.set(gameName, sessions);
     }
     if (active) {
-      sessions.set(sessionId, Date.now() + 30000);
+      // The session belongs to an open event stream, not a browser timer lease.
+      sessions.add(sessionId);
       const timer = this.catalogIdleTimers.get(gameName);
       if (timer) clearTimeout(timer);
       this.catalogIdleTimers.delete(gameName);
-      if (!this.catalogSessionTimer) {
-        this.catalogSessionTimer = setInterval(() => this.expireCatalogSessions(), 5000);
-        this.catalogSessionTimer.unref();
-      }
-      await this.getCatalogIndex(gameName);
+      // A reconnect may arrive while the previous worker is still draining.
+      // Snapshot reads stay non-blocking, but a live connection must eventually
+      // own a worker even when browser polling is suspended.
+      if (this.catalogClosing.has(gameName)) await this.catalogClosing.get(gameName);
+      if (this.catalogSessions.get(gameName)?.has(sessionId)) await this.getCatalogIndex(gameName);
     } else {
       sessions.delete(sessionId);
       if (!sessions.size) this.catalogReads.delete(gameName);
       this.releaseUnusedCatalog(gameName);
     }
     return { ok: true };
-  }
-
-  private expireCatalogSessions() {
-    for (const [gameName, sessions] of this.catalogSessions) {
-      for (const [id, expiry] of sessions) if (expiry <= Date.now()) sessions.delete(id);
-      this.releaseUnusedCatalog(gameName);
-    }
   }
 
   private releaseUnusedCatalog(gameName: string) {
@@ -72,10 +65,6 @@ export class GltfResourceIndexService implements OnModuleDestroy {
       if (index) {
         this.catalogSnapshots.set(gameName, this.catalogSnapshot(gameName, index));
         void this.closeCatalog(gameName, index).catch(error => this.logger.warn(`glTF 索引关闭失败: ${error.message}`));
-      }
-      if (!this.catalogSessions.size && this.catalogSessionTimer) {
-        clearInterval(this.catalogSessionTimer);
-        this.catalogSessionTimer = undefined;
       }
     }, Math.max(10000, (this.catalogReads.get(gameName) ?? -Infinity) + 30000 - Date.now()));
     timer.unref();
@@ -145,8 +134,6 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    if (this.catalogSessionTimer) clearInterval(this.catalogSessionTimer);
-    this.catalogSessionTimer = undefined;
     for (const timer of this.catalogIdleTimers.values()) clearTimeout(timer);
     this.catalogIdleTimers.clear();
     await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));

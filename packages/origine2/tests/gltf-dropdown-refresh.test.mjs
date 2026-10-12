@@ -530,44 +530,42 @@ test('catalog progress and completion never reload the game preview', async () =
   assert.equal(events.length, 0);
 });
 
-test('project session renews its lease and releases it on tab hide or component cleanup', async () => {
+test('project session uses a persistent connection and closes it on page exit or component cleanup', async () => {
   const { code } = await transform(await readFile(new URL('../src/hooks/gltf/useGltfCatalog.ts', import.meta.url), 'utf8'), {
     loader: 'ts', format: 'cjs',
   });
-  const effects = [], calls = [], releases = [];
-  const timers = new Map(), events = new Map();
+  const effects = [], streams = [];
+  const events = new Map();
+  class EventSource {
+    static CLOSED = 2;
+    readyState = 1;
+    constructor(url) { this.url = url; streams.push(this); }
+    close() { this.readyState = EventSource.CLOSED; }
+  }
   const module = { exports: {} };
-  vm.runInNewContext(code, { module, exports: module.exports, AbortController, console,
+  vm.runInNewContext(code, { module, exports: module.exports, EventSource, encodeURIComponent, console,
     window: {
-      setInterval(fn, ms) { timers.set(ms, fn); return ms; },
-      clearInterval(id) { timers.delete(id); },
       addEventListener(name, fn) { events.set(name, fn); },
       removeEventListener(name) { events.delete(name); },
     },
-    fetch(url, options) { releases.push(JSON.parse(options.body)); assert.equal(options.keepalive, true); return Promise.resolve({}); },
     require(name) {
       if (name === 'react') return { useCallback: fn => fn, useRef: () => ({}), useEffect: fn => effects.push(fn) };
       if (name === 'swr') return { __esModule: true, default: () => ({ mutate() {} }) };
-      if (name === 'axios') return { __esModule: true, default: { async post(url, body, options) { calls.push({ body, signal: options.signal }); return { data: {} }; } } };
-      if (name === 'uuid') return { v4: () => 'test-session' };
+      if (name === 'axios') return { __esModule: true, default: {} };
       if (name === '@/utils/eventBus') return { eventBus: { emit() {} } };
       return {};
     },
   });
-  module.exports.useGltfCatalogSession('project');
+  module.exports.useGltfCatalogSession('项目 / test');
   const cleanup = effects[0]();
-  assert.equal(calls[0].body.active, true);
-  assert.equal(calls[0].body.gameName, 'project');
-  timers.get(10000)();
-  assert.equal(calls.length, 2);
-  events.get('pagehide')();
-  assert.equal(releases.at(-1).active, false);
+  assert.equal(streams[0].url, `/api/manageGame/gltfCatalogSession?gameName=${encodeURIComponent('项目 / test')}`);
   events.get('pageshow')();
-  assert.equal(calls.length, 3, 'restoring a cached tab immediately renews its lease');
+  assert.equal(streams.length, 1, 'pageshow must not open duplicate live connections');
+  events.get('pagehide')();
+  assert.equal(streams[0].readyState, EventSource.CLOSED);
+  events.get('pageshow')();
+  assert.equal(streams.length, 2, 'restoring a cached tab opens a new connection');
   cleanup();
-  assert.equal(timers.size, 0);
   assert.equal(events.size, 0);
-  assert.equal(calls[0].signal.aborted, true);
-  assert.equal(releases.at(-1).sessionId, 'test-session');
-  assert.equal(releases.at(-1).active, false);
+  assert.equal(streams[1].readyState, EventSource.CLOSED);
 });

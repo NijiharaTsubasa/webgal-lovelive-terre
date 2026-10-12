@@ -92,21 +92,42 @@ describe('GltfService', () => {
     expect(await service.updateGltfResourceCatalog('demo', 3)).toEqual(catalog);
   });
 
-  it('rejects malformed sessions and forwards valid editor leases', async () => {
-    await expect(
-      service.gltfCatalogSession('../demo', 'tab', true),
-    ).rejects.toThrow('Invalid catalog session');
-    await expect(service.gltfCatalogSession('demo', '', true)).rejects.toThrow(
-      'Invalid catalog session',
-    );
-    expect(await service.gltfCatalogSession('demo', 'tab', false)).toEqual({
-      ok: true,
-    });
-    expect(index.gltfCatalogSession).toHaveBeenCalledWith(
-      'demo',
-      'tab',
-      false,
-    );
+  it('rejects malformed session project names', () => {
+    for (const name of ['../demo', '', '.', '..', undefined])
+      expect(() => service.gltfCatalogSession(name)).toThrow('Invalid game name');
+  });
+
+  it('holds distinct sessions for open streams and releases them on disconnect', async () => {
+    jest.useFakeTimers();
+    const messages: unknown[] = [];
+    const first = service.gltfCatalogSession('demo').subscribe(message => messages.push(message));
+    const second = service.gltfCatalogSession('demo').subscribe();
+    try {
+      await jest.advanceTimersByTimeAsync(180000);
+      const opens = index.gltfCatalogSession.mock.calls.filter(call => call[2]);
+      expect(opens).toHaveLength(2);
+      expect(opens[0][1]).not.toBe(opens[1][1]);
+      expect(index.gltfCatalogSession.mock.calls.filter(call => !call[2])).toHaveLength(0);
+      expect(messages.length).toBeGreaterThan(1);
+      first.unsubscribe();
+      expect(index.gltfCatalogSession).toHaveBeenCalledWith('demo', opens[0][1], false);
+      second.unsubscribe();
+      expect(index.gltfCatalogSession).toHaveBeenCalledWith('demo', opens[1][1], false);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally { first.unsubscribe(); second.unsubscribe(); jest.useRealTimers(); }
+  });
+
+  it('releases a stream closed while initialization is pending', async () => {
+    let finish: (value: unknown) => void;
+    index.gltfCatalogSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const subscription = service.gltfCatalogSession('demo').subscribe();
+    subscription.unsubscribe();
+    finish({ ok: true });
+    await Promise.resolve();
+    const sessionId = index.gltfCatalogSession.mock.calls[0][1];
+    expect(index.gltfCatalogSession.mock.calls).toEqual([
+      ['demo', sessionId, true], ['demo', sessionId, false],
+    ]);
   });
   it('rescans once for a newly copied shader package and updates the worker without another scan', async () => {
     await model([{ name: 'unused.optional', required: false }]);

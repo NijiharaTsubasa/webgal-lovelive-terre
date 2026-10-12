@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfigFromFile } from 'vite';
 import chokidar from 'chokidar';
+import { EventEmitter } from 'node:events';
+import vm from 'node:vm';
 
 test('dev watcher skips locked build output while preserving source watching', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'terre-vite-watch-'));
@@ -39,5 +41,35 @@ test('dev watcher skips locked build output while preserving source watching', a
     await watcher?.close();
     fs.watch = originalWatch;
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('both development proxies close upstream catalog streams when the page disconnects', async () => {
+  const config = await loadConfigFromFile({ command: 'serve', mode: 'development' }, path.resolve('vite.config.ts'));
+  const proxy = new EventEmitter();
+  config.config.server.proxy['/api'].configure(proxy);
+  const options = [];
+  const app = { set() {}, all() {}, use() {}, get() { return 80; }, listen() {} };
+  vm.runInNewContext(fs.readFileSync('../dev-server/index.js', 'utf8'), {
+    console,
+    require(name) {
+      if (name === 'express') return () => app;
+      if (name === 'process') return { env: {} };
+      if (name === 'http-proxy-middleware') return { createProxyMiddleware(route, option) { options.push({ route, option }); return {}; } };
+      throw new Error(name);
+    },
+  });
+  const hooks = [
+    (...args) => proxy.emit('proxyReq', ...args),
+    options.find(entry => entry.route === '/api').option.onProxyReq,
+  ];
+  for (const hook of hooks) {
+    for (const url of ['/api/manageGame/gltfCatalogSession?gameName=demo', '/api/manageGame/gameList']) {
+      let destroyed = false;
+      const response = new EventEmitter();
+      hook({ destroy() { destroyed = true; } }, { url }, response);
+      response.emit('close');
+      assert.equal(destroyed, url.includes('gltfCatalogSession'));
+    }
   }
 });
