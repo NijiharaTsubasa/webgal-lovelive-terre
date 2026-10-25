@@ -6,7 +6,7 @@ import useEditorStore from "@/store/useEditorStore";
 import { api } from "@/api";
 import { t } from "@lingui/macro";
 import Assets, { IFile, IFileConfig, IFileFunction } from "@/components/Assets/Assets";
-import { ReactNode, useCallback, useEffect } from "react";
+import { ReactNode, useCallback, useEffect, useRef } from "react";
 import { bundleIcon, DismissFilled, DismissRegular, WarningFilled, WarningRegular } from "@fluentui/react-icons";
 
 const DismissIcon = bundleIcon(DismissFilled, DismissRegular);
@@ -18,13 +18,18 @@ export interface IChooseFile {
   basePath?: string[]; // 相对于rootPath的路径
   button?: ReactNode;
   selectedFilePath?: string | null; // 默认选中文件路径
-  onChange: (choosedFile: IFile | null) => void;
+  onChange: (choosedFile: IFile | null) => void | boolean | Promise<void | boolean>;
   extNames?: string[]; // 允许的拓展名
   hiddenFiles?: string[];
   fileFilter?: (file: IFile) => boolean;
   onOpen?: () => void;
   chooseModelDirectory?: boolean;
   toolbar?: ReactNode;
+  sidebar?: ReactNode;
+  footer?: (close: () => void) => ReactNode;
+  onClose?: () => void;
+  deferClose?: boolean;
+  selectionDisabled?: boolean;
 }
 
 export default function ChooseFile(props: IChooseFile) {
@@ -34,6 +39,9 @@ export default function ChooseFile(props: IChooseFile) {
   const basePath = props.basePath ?? [];
 
   const isShowChooseFileCallout = useValue(false);
+  const selectionRequest = useRef(0);
+  const selecting = useRef<number | null>(null);
+  useEffect(() => { selectionRequest.current++; selecting.current=null; }, [basePath.join('/')]);
 
   const invalidPath = useValue('');
   const invalidRanges = useValue<{ start: number; width: number }[]>([]);
@@ -118,12 +126,16 @@ export default function ChooseFile(props: IChooseFile) {
 
   function toggleIsCalloutVisible() {
     if (!isShowChooseFileCallout.value) props.onOpen?.();
+    else props.onClose?.();
+    selectionRequest.current++;
+    selecting.current=null;
     invalidPath.value = '';
     invalidRanges.value = [];
     isShowChooseFileCallout.set(!isShowChooseFileCallout.value);
   }
 
   async function onChooseFile(file: IFile, type: 'scene' | 'asset') {
+    if (props.selectionDisabled || (props.deferClose && selecting.current !== null)) return;
     const prefix = `${basePath.join('/')}/`;
     // 移除开头的 basePath/
     let fileName = file.path.startsWith(prefix)
@@ -136,11 +148,28 @@ export default function ChooseFile(props: IChooseFile) {
       return;
     }
 
-    toggleIsCalloutVisible();
-    props.onChange({
+    const selected = {
       ...file,
       name: fileName,
-    });
+    };
+    if (!props.deferClose) {
+      closePicker();
+      void props.onChange(selected);
+      return;
+    }
+    const request = ++selectionRequest.current;
+    selecting.current = request;
+    try {
+      const close = await props.onChange(selected);
+      if (request === selectionRequest.current && close !== false) closePicker();
+    } finally { if(selecting.current === request) selecting.current = null; }
+  }
+
+  function closePicker() {
+    selectionRequest.current++;
+    selecting.current=null;
+    isShowChooseFileCallout.set(false);
+    props.onClose?.();
   }
 
   const fileFunction: IFileFunction = {
@@ -157,6 +186,7 @@ export default function ChooseFile(props: IChooseFile) {
     <Popover
       withArrow
       trapFocus
+      positioning={props.sidebar ? {shiftToCoverTarget:true,overflowBoundaryPadding:12} : undefined}
       open={isShowChooseFileCallout.value}
       onOpenChange={toggleIsCalloutVisible}
     >
@@ -166,12 +196,14 @@ export default function ChooseFile(props: IChooseFile) {
         </div>
       </PopoverTrigger>
       <PopoverSurface style={{ padding: 0 }}>
-        <div className={styles.chooseFileContentWarpper}>
+        <div className={styles.chooseFileContentWarpper} style={props.sidebar ? {width:'min(42rem, calc(100vw - 32px))',height:'min(480px, calc(100dvh - 48px))'} : undefined}>
           <div className={styles.chooseFileTitle}>
             {props.title ?? t`选择文件`}
           </div>
           {props.toolbar && <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px' }}>{props.toolbar}</div>}
-          <Assets
+          <div style={{display:'flex',flex:1,minHeight:0}}>
+          {props.sidebar && <aside style={{width:172,flexShrink:0,overflowY:'auto',padding:8,borderRight:'var(--border-sm)'}}>{props.sidebar}</aside>}
+          <div style={{flex:1,minWidth:0,minHeight:0}}><Assets
             key={JSON.stringify([basePath, props.selectedFilePath, props.chooseModelDirectory])}
             rootPath={rootPath}
             basePath={basePath}
@@ -184,7 +216,9 @@ export default function ChooseFile(props: IChooseFile) {
             allowedExtNames={props.extNames}
             fileFilter={props.fileFilter}
             chooseModelDirectory={props.chooseModelDirectory}
-          />
+          /></div>
+          </div>
+          {props.footer?.(closePicker)}
           {invalidRanges.value.length > 0 &&
             <div className={styles.chooseFileFooterWarning}>
               <div className={styles.chooseFileFooterWarningIcon}>

@@ -30,6 +30,14 @@ test('optional preview accepts only the single matching integrated model WebP da
   assert.equal(modelPreview({ components: [...config(preview).components, ...config(preview).components] }, '角色'), undefined);
 });
 
+test('composed model previews use the head image and reject incomplete or ambiguous packages', () => {
+  const head={type:'model',role:'head',name:'角色',preview};
+  const body={type:'model',role:'body',name:'角色'};
+  assert.equal(modelPreview({components:[body,head]},'角色'),preview);
+  for (const components of [[head],[body],[head,head,body],[head,body,body]])
+    assert.equal(modelPreview({components},'角色'),undefined);
+});
+
 test('hover reads after 200ms, cancelled and old requests cannot replace the current preview', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let reads = 0;
@@ -69,8 +77,27 @@ test('bounded preview cache shares requests and a new directory snapshot loader 
   assert.equal(await createModelPreviewLoader(async () => { throw new Error('missing'); })(info), undefined);
 });
 
+test('head and body previews remain separate for the same package and missing body images stay empty', async () => {
+  const bodyPreview = 'data:image/webp;base64,REVG';
+  const pair = { components: [
+    { type: 'model', role: 'head', name: '角色', preview },
+    { type: 'model', role: 'body', name: '角色', preview: bodyPreview },
+  ] };
+  let reads = 0;
+  const load = createModelPreviewLoader(async () => { reads++; return pair; });
+  const info = { name: '角色', configUrl: '/same/config.json' };
+  assert.equal(await load({ ...info, role: 'head' }), preview);
+  assert.equal(await load({ ...info, role: 'body' }), bodyPreview);
+  assert.equal(await load({ ...info, role: 'head' }), preview);
+  assert.equal(reads, 2, 'the preview cache separates roles and reuses each role independently');
+  assert.equal(modelPreview({ components: [pair.components[0], { ...pair.components[1], preview: undefined }] }, '角色', 'body'), undefined);
+  assert.equal(modelPreview({ components: [pair.components[0]] }, '角色', 'head'), preview);
+  assert.equal(modelPreview({ components: [pair.components[1]] }, '角色', 'body'), bodyPreview);
+});
+
 async function renderModule(file, modules) {
   const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat() }),
+    useContext: context => context?.value,
     useRef: value => ({ current: value }), useState: () => [undefined, () => {}], useEffect() {}, useMemo: fn => fn() };
   const { code } = await transform(await readFile(new URL(file, import.meta.url), 'utf8'), {
     loader: 'tsx', format: 'cjs', jsx: 'transform', jsxFactory: 'React.createElement',
@@ -117,11 +144,36 @@ test('shared Assets hook only browses the current fixed model directory', async 
     const hook = await renderModule('../src/hooks/gltf/useModelAssets.ts', {
       swr: { default: key => { keys.push(key); return { data: key ? { models: [{ name: '角色', path: '分组/模型 %', description: model.description, preview }] } : undefined, mutate() {} }; } },
       '@/utils/gltf/modelAssets': { modelAssetMap, createModelPreviewLoader },
+      '@/utils/gltf/ModelPreviewRoleContext': {ModelPreviewRoleContext:{value:undefined}},
     });
     const result = hook(root, [...root, '3d', 'figure']);
-    assert.deepEqual([...keys[0]], ['gltf-model-directory', '新的 游戏', '']);
+    assert.deepEqual([...keys[0]], ['gltf-model-directory', '新的 游戏', '', undefined]);
     assert.equal(result.models.size, 2);
     keys.length = 0;
     assert.equal(hook(root, [...root, 'background']).models.size, 0);
     assert.equal(keys[0], null);
+});
+
+test('role changes request distinct directory metadata and pass the selected role to preview loading', async () => {
+  const context = { value: 'head' };
+  const keys = [], reads = [], calls = [];
+  const hook = await renderModule('../src/hooks/gltf/useModelAssets.ts', {
+    swr: { default(key, fetcher) {
+      keys.push(key); reads.push(fetcher);
+      return { data: { models: [{ name: '角色', path: 'pair' }] }, mutate() {} };
+    } },
+    axios: { default: { async post(url, body) { calls.push({ url, body }); return { data: {} }; } } },
+    '@/utils/gltf/modelAssets': { modelAssetMap, createModelPreviewLoader },
+    '@/utils/gltf/ModelPreviewRoleContext': { ModelPreviewRoleContext: context },
+  });
+  const head = hook(root, [...root, '3d', 'figure']);
+  context.value = 'body';
+  const body = hook(root, [...root, '3d', 'figure']);
+  assert.deepEqual([...keys[0]], ['gltf-model-directory', '新的 游戏', '', 'head']);
+  assert.deepEqual([...keys[1]], ['gltf-model-directory', '新的 游戏', '', 'body']);
+  assert.equal(head.models.get('3d/figure/pair').role, 'head');
+  assert.equal(body.models.get('3d/figure/pair').role, 'body');
+  await Promise.all(reads.map(read => read()));
+  assert.deepEqual(calls.map(call => call.body.role), ['head', 'body']);
+  assert.ok(calls.every(call => call.url === '/api/manageGame/browseGltfModels'));
 });

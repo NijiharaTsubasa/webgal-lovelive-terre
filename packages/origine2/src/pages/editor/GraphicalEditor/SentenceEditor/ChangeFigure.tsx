@@ -24,7 +24,8 @@ import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
 import { gltfFigureOptions, isGltfConfigPath, NativeExpressionOptions } from "@/utils/gltf/gltfFigure";
 import GltfExpressionPicker from '@/components/gltf/GltfExpressionPicker';
 import useGltfCatalog from '@/hooks/gltf/useGltfCatalog';
-import { preferredFigure3D, rememberFigureMode } from '@/utils/gltf/gltfFigure';
+import GltfFigurePicker from '@/components/gltf/GltfFigurePicker';
+import { splitFigureConfigs, figurePartConfig } from '@/utils/gltf/figureComposition';
 
 type FigurePosition = "" | "left" | "left14" | "left13" | "right13" | "right14" | "right";
 type AnimationFlag = "" | "on";
@@ -38,8 +39,6 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const updateExpand = useEditorStore.use.updateExpand();
   const isGoNext = useValue(!!getArgByKey(props.sentence, "next"));
   const figureFile = useValue(props.sentence.content);
-  const [figureSelectionError, setFigureSelectionError] = useState("");
-  const figureSelectionRequest = useRef(0);
   const isHaveSpineArg = figureFile.value.includes('?type=spine');
   const figurePosition = useValue<FigurePosition>("");
   const isNoFile = props.sentence.content === "" || props.sentence.content === "none";
@@ -75,7 +74,6 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [isConfigLive2D, setIsConfigLive2D] = useState(false);
-  const [figurePicker3D, setFigurePicker3D] = useState(() => preferredFigure3D(props.sentence.content, t`选择立绘文件`));
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);
   const [nativeExpressions, setNativeExpressions] = useState<NativeExpressionOptions>({ eyes: [], mouths: [], defaults: {} });
   const [expressionOptionsReady, setExpressionOptionsReady] = useState(false);
@@ -273,10 +271,13 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
       // A valid selected config can be classified while its background index is
       // still being built, including a file copied after the picker opened.
       if (gltfCatalog.enabled) {
-        axios.get(`/games/${encodeURIComponent(gameDir)}/game/3d/figure/${pathRaw}`, requestOptions).catch(error => {
-          if (error.response?.status === 404) return axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${pathRaw}`, requestOptions);
+        const configPaths = splitFigureConfigs(pathRaw);
+        Promise.all(configPaths.map(path => axios.get(`/games/${encodeURIComponent(gameDir)}/game/3d/figure/${path}`, requestOptions).catch(error => {
+          if (error.response?.status === 404) return axios.get(`/games/${encodeURIComponent(gameDir)}/game/figure/${path}`, requestOptions);
           throw error;
-        }).then(async response => {
+        }))).then(async responses => {
+          const response = {data:responses.length === 1 ? responses[0].data : {components:responses.flatMap((response,index)=>
+            figurePartConfig(response.data).filter(part=>part.role===(index===0?'head':'body')))}};
           if (controller.signal.aborted) return;
           const modelOptions = gltfFigureOptions(response.data, []);
           if (!modelOptions) {
@@ -737,51 +738,10 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
           <div className={styles.filePreviewRow}>
             <AssetPreview basePath="figure" file={figureFile.value} />
             <span>{figureFile.value}</span>
-            <ChooseFile
-              title={t`选择立绘文件`}
-              toolbar={gltfCatalog.enabled && <>
-                <span>{t`切换立绘类型`}</span>
-                <Button appearance={!figurePicker3D ? 'primary' : 'secondary'} aria-pressed={!figurePicker3D}
-                  onClick={() => { rememberFigureMode(false); setFigurePicker3D(false); }}>2D</Button>
-                <Button appearance={figurePicker3D ? 'primary' : 'secondary'} aria-pressed={figurePicker3D}
-                  onClick={() => { rememberFigureMode(true); setFigurePicker3D(true); }}>3D</Button>
-              </>}
-              basePath={figurePicker3D && gltfCatalog.enabled ? ['3d', 'figure'] : ['figure']}
-              chooseModelDirectory={figurePicker3D && gltfCatalog.enabled}
-              selectedFilePath={figurePicker3D === isGltfConfigPath(figureFile.value) ? figureFile.value : undefined}
-              onOpen={() => { setFigurePicker3D(preferredFigure3D(figureFile.value, t`选择立绘文件`)); void refreshGltfCatalog(); }}
-              fileFilter={figurePicker3D && gltfCatalog.enabled ? file => isGltfConfigPath(file.path) : undefined}
-              onChange={async (fileDesc) => {
-                const request = ++figureSelectionRequest.current;
-                setFigureSelectionError("");
-                if (figurePicker3D && gltfCatalog.enabled && fileDesc) {
-                  try {
-                    const path = fileDesc.isDir ? fileDesc.name : fileDesc.name.replace(/\/config\.json$/i, '');
-                    const { data } = await axios.post('/api/manageGame/selectGltfModel', { gameName: gameDir, path });
-                    if (request !== figureSelectionRequest.current) return;
-                    if (data.error) { setFigureSelectionError(data.error); return; }
-                    rememberFigureMode(true);
-                    figureFile.set(`${path}/config.json`);
-                    void refreshGltfCatalog();
-                    submit();
-                  } catch (error) {
-                    if (request === figureSelectionRequest.current) setFigureSelectionError(axios.isAxiosError(error)
-                      ? String(error.response?.data?.message ?? error.message) : String(error));
-                  }
-                  return;
-                }
-                if (fileDesc) rememberFigureMode(false);
-                figureFile.set(fileDesc?.name ?? "");
-                submit();
-              }}
-              extNames={[
-                ...extNameMap.get('image') ?? [],
-                ...extNameMap.get('json') ?? [],
-                ...extNameMap.get('video') ?? [],
-              ]}
-            />
+            <GltfFigurePicker value={figureFile.value} enabled={gltfCatalog.enabled} placeholder={t`选择立绘文件`}
+              onOpen={()=>{void refreshGltfCatalog();}}
+              onChange={path=>{figureFile.set(path);void refreshGltfCatalog();submit();}} />
           </div>
-          {figureSelectionError && <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)' }}>{figureSelectionError}</div>}
           {gltfCatalog.enabled && gltfCatalog.indexing && <div role="status">{gltfCatalog.resources.some(entry => entry.type === 'motion' || entry.type === 'garupa-motion' || entry.type === 'garupa-expression')
             ? '正在补充动作说明，动作与表情列表已可使用。'
             : '正在发现 3D 动作与表情，列表会自动更新。'}</div>}

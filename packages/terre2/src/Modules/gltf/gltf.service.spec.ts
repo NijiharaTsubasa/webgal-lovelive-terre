@@ -161,6 +161,38 @@ describe('GltfService', () => {
     );
     expect(scan).toHaveBeenCalledTimes(1);
   });
+  it('validates dependencies from both parts when selecting a composed model', async () => {
+    await model();
+    await put('game/3d/figure/a/config.json',{components:[
+      {type:'model',role:'head',name:'a',model:'model.glb',behaviors:[{name:'required.head'}]},
+      {type:'model',role:'body',name:'a',model:'model.glb',behaviors:[{name:'required.body'}]},
+    ]});
+    await expect(service.selectGltfModel('demo','a')).rejects.toThrow(
+      'behavior:required.head, behavior:required.body, shader:Eye');
+  });
+  it('checks each selected part in its own package and returns previews for the chosen role', async () => {
+    await model();
+    await put('game/3d/figure/a/config.json',{components:[
+      {type:'model',role:'head',name:'head',model:'model.glb',group:'garupa',preview:'head-image'},
+    ]});
+    await put('game/3d/figure/b/config.json',{components:[
+      {type:'model',role:'body',name:'body',model:'body.glb',group:'garupa',preview:'body-image'},
+    ]});
+    const json=Buffer.from(JSON.stringify({materials:[{extras:{shader:'BodyShader'}}]}));
+    const header=Buffer.alloc(20);
+    header.writeUInt32LE(0x46546c67,0);header.writeUInt32LE(json.length,12);header.writeUInt32LE(0x4e4f534a,16);
+    await fs.writeFile(join(root,'demo/game/3d/figure/b/body.glb'),Buffer.concat([header,json]));
+    await put('game/3d/runtime/new/config.json',{components:[{type:'shader',name:'Eye'},{type:'shader',name:'BodyShader'}]});
+    const selected=await service.selectGltfModel('demo','a/config.json+b/config.json');
+    expect(selected.role).toBe('composed');
+    expect(selected.selectionParts.map(part=>[part.role,part.path,part.preview])).toEqual([
+      ['head','a','head-image'],['body','b','body-image'],
+    ]);
+    expect(selected.parts).toBeUndefined();
+    expect((await service.selectGltfModel('demo','a','head')).role).toBe('head');
+    await expect(service.selectGltfModel('demo','a','body')).rejects.toThrow('只包含头部');
+    await expect(service.selectGltfModel('demo','a','other' as any)).rejects.toThrow('Invalid model role');
+  });
   it('requires behavior dependencies unless required is explicitly false', async () => {
     await model([{ name: 'required.face', required: true }, { name: 'unused.face', required: false }]);
     await expect(service.selectGltfModel('demo', 'a')).rejects.toThrow('behavior:required.face, shader:Eye');

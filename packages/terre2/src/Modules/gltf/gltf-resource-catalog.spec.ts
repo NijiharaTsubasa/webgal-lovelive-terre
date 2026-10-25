@@ -14,6 +14,63 @@ describe('fixed glTF resource directories', () => {
     await fs.writeFile(file, JSON.stringify(value));
     return file;
   }
+  it('selects model parts independently and reports ambiguous selections', async () => {
+    const head = {type:'model',role:'head',name:'garupa',model:'head.glb',preview:'head-image',expressionGroups:[{type:'eye',states:[{name:'Smile'}]}]};
+    const body = {type:'model',role:'body',name:'garupa',model:'body.glb',preview:'body-image',motionGroup:'garupa'};
+    await put('game/3d/figure/pair/config.json',{components:[body,head]});
+    const model=await readGltfModel(root,'pair');
+    expect(model.parts.map(part=>part.role)).toEqual(['head','body']);
+    expect(model.role).toBe('composed');
+    expect(model.expressionGroups).toEqual(head.expressionGroups);
+    expect(model.motionGroup).toBe('garupa');
+    expect((await readGltfModel(root,'pair','head')).preview).toBe('head-image');
+    expect((await readGltfModel(root,'pair','body')).preview).toBe('body-image');
+    await put('game/3d/figure/no-head-preview/config.json',{components:[{...head,preview:undefined},body]});
+    expect((await readGltfModel(root,'no-head-preview','head')).preview).toBeUndefined();
+    expect((await readGltfModel(root,'no-head-preview')).preview).toBeUndefined();
+    for (const part of [head,body]) {
+      await put(`game/3d/figure/${part.role}/config.json`,{components:[part]});
+      expect((await readGltfModel(root,part.role)).role).toBe(part.role);
+      expect((await readGltfModel(root,part.role)).selectionParts).toHaveLength(1);
+    }
+    await expect(readGltfModel(root,'head','body')).rejects.toThrow('只包含头部');
+    for (const parts of [[head,head,body],[head,body,body]]) {
+      await put('game/3d/figure/bad/config.json',{components:parts});
+      await expect(readGltfModel(root,'bad')).rejects.toThrow('多个头部或多个身体');
+      await expect(readGltfModel(root,'bad','head')).rejects.toThrow('多个头部或多个身体');
+    }
+    const browsed=await browseGltfModels(root,'','body');
+    const pair=browsed.models.find(model=>model.path==='pair');
+    expect(pair.preview).toBe('body-image');
+    const headOnly=browsed.models.find(model=>model.path==='head');
+    expect(headOnly).toBeDefined();
+    expect(headOnly.preview).toBeUndefined();
+    expect(pair.parts).toBeUndefined();
+    expect(pair.selectionParts).toBeUndefined();
+  });
+  it('combines selected components across packages and preserves their source directories', async () => {
+    const head={type:'model',role:'head',name:'Head',model:'head.glb',group:'garupa',renderProfile:'meteor',preview:'head-image',expressionGroups:[{type:'eye'}]};
+    const body={type:'model',role:'body',name:'Body',model:'body.glb',group:'garupa',renderProfile:'meteor',preview:'body-image',motionGroup:'garupa'};
+    await put('game/3d/figure/h/config.json',{components:[head]});
+    await put('game/3d/figure/b/config.json',{components:[body]});
+    const combined=await readGltfModel(root,'h/config.json+b/config.json');
+    expect(combined.role).toBe('composed');
+    expect(combined.expressionGroups).toEqual(head.expressionGroups);
+    expect(combined.motionGroup).toBe('garupa');
+    expect(combined.selectionParts.map(part=>[part.role,part.path,part.config,part.preview])).toEqual([
+      ['head','h','3d/figure/h/config.json','head-image'],['body','b','3d/figure/b/config.json','body-image'],
+    ]);
+    await expect(readGltfModel(root,'b/config.json+h/config.json')).rejects.toThrow('只包含身体');
+    await expect(readGltfModel(root,'h/config.json+b/config.json+h/config.json')).rejects.toThrow('组合路径');
+    await expect(readGltfModel(root,'h/config.json+../../outside/config.json')).rejects.toThrow('超出');
+    for (const mismatch of [{group:'other'},{renderProfile:'other'}]) {
+      await put('game/3d/figure/b/config.json',{components:[{...body,...mismatch}]});
+      await expect(readGltfModel(root,'h/config.json+b/config.json')).rejects.toThrow('不兼容');
+    }
+    await put('game/3d/figure/i/config.json',{components:[{...body,role:'integrated'}]});
+    expect((await readGltfModel(root,'i','head')).role).toBe('integrated');
+    await expect(readGltfModel(root,'h/config.json+i/config.json')).rejects.toThrow('不能使用完整模型');
+  });
   async function motion(path: string) {
     const file = join(root, path),
       header = Buffer.from(

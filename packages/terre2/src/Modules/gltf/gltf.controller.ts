@@ -1,6 +1,7 @@
 import { Body, Controller, Post, Query, Sse } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { GltfService } from './gltf.service';
+import type { GltfModelRole } from './gltf-model-packages';
 
 @Controller('api/manageGame')
 @ApiTags('Manage Game')
@@ -18,13 +19,13 @@ export class GltfController {
   }
 
   @Post('browseGltfModels')
-  async browseGltfModels(@Body() data: { gameName: string; directory: string }) {
-    return this.gltf.browseGltfModels(data.gameName, data.directory);
+  async browseGltfModels(@Body() data: { gameName: string; directory: string; role?: GltfModelRole }) {
+    return this.gltf.browseGltfModels(data.gameName, data.directory, data.role);
   }
 
   @Post('selectGltfModel')
-  async selectGltfModel(@Body() data: { gameName: string; path: string }) {
-    return this.gltf.selectGltfModel(data.gameName, data.path);
+  async selectGltfModel(@Body() data: { gameName: string; path: string; role?: GltfModelRole }) {
+    return this.gltf.selectGltfModel(data.gameName, data.path, data.role);
   }
 
 }

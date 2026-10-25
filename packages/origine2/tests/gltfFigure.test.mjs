@@ -23,6 +23,19 @@ test('only one integrated model can supply model-owned expressions', () => {
   assert.deepEqual(gltfFigureOptions({ components: [integrated] }, []), { motions: [], expressions: [], nativeExpressions: { eyes: ['Sad', 'Neutral'], mouths: [], defaults: { eye: 'Sad' } }, supportsLive2DExpressions: false });
 });
 
+test('a same-package head and body expose head expressions and body motion compatibility', () => {
+  const head={type:'model',role:'head',model:'head.glb',expressionGroups:[{type:'eye',states:[{name:'Smile'}]}]};
+  const body={type:'model',role:'body',model:'body.glb',motionGroup:'garupa'};
+  const adapter=[{components:[{type:'garupa-expression-adapter',motionGroup:'garupa'}]}];
+  for (const components of [[head,body],[body,head]]) {
+    const options=gltfFigureOptions({components},[],adapter);
+    assert.equal(options.supportsLive2DExpressions,true);
+    assert.deepEqual(options.nativeExpressions.eyes,['Smile']);
+  }
+  for (const components of [[head],[body],[head,head,body],[head,body,body]])
+    assert.equal(gltfFigureOptions({components},[],adapter),null);
+});
+
 test('parameter expressions are separate from native choices and deduplicate', () => {
   assert.deepEqual(gltfFigureOptions({ components: [{ type: 'model', role: 'integrated', model: 'model.glb', motionGroup: 'llas', expressionGroups: [{ type: 'mouth', states: [{ name: 'Smile' }, { name: 'A' }] }], defaultExpression: { closed: 'Smile', open: 'A' } }] }, [
     { type: 'motion', name: 'mot_00_00010', config: 'motion/config.json' },

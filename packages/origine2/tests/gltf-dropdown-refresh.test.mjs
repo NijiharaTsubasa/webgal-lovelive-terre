@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { transform } from 'esbuild';
 import * as gltfFigure from '../src/utils/gltf/gltfFigure.ts';
+import * as figureComposition from '../src/utils/gltf/figureComposition.ts';
 
 async function componentHarness(file, modules = {}) {
   const hooks = [];
@@ -46,6 +47,8 @@ async function componentHarness(file, modules = {}) {
   let catalogHook;
   const requireModule = name => {
     if (name === 'react') return React;
+    if (name === '@/utils/gltf/figureComposition') return {__esModule:true,...figureComposition};
+    if (name === '@/utils/gltf/ModelPreviewRoleContext') return {ModelPreviewRoleContext:{Provider:'ModelPreviewRoleProvider'}};
     if (name in modules) return { __esModule: true, ...modules[name] };
     if (name === 'swr') return { __esModule: true, default(key, fetcher) {
       const id = JSON.stringify(key);
@@ -376,15 +379,16 @@ test('selecting a model copied after the picker opened refreshes the parameter p
   let revision = 7;
   const modelPath = 'new';
   const props = { sentence: { content: 'old.png', args: [] }, onSubmit() {} };
+  const axios = {
+    async post(url) { if (url.endsWith('selectGltfModel')) return { data: {role:'integrated'} }; return { data: { enabled: true, revision, resources: revision === 7 ? [] : [
+      { type: 'model', name: 'new', config: `figure/${modelPath}` },
+      { type: 'motion', name: 'llas/idle.motionbin', config: '3d/motion/llas/idle.motionbin' },
+    ] } }; },
+    async get() { return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: 'Smile' }] }] }] } }; },
+  };
   const harness = await componentHarness('../src/pages/editor/GraphicalEditor/SentenceEditor/ChangeFigure.tsx', {
     '@/store/useEditorStore': { default: store },
-    axios: { default: {
-      async post(url) { if (url.endsWith('selectGltfModel')) return { data: {} }; return { data: { enabled: true, revision, resources: revision === 7 ? [] : [
-        { type: 'model', name: 'new', config: `figure/${modelPath}` },
-        { type: 'motion', name: 'llas/idle.motionbin', config: '3d/motion/llas/idle.motionbin' },
-      ] } }; },
-      async get() { return { data: { components: [{ type: 'model', role: 'integrated', model: 'model.glb', expressionGroups: [{ type: 'eye', states: [{ name: 'Smile' }] }] }] } }; },
-    } },
+    axios: {default:axios},
     '../../../../hooks/useValue': { useValue: value => ({ value, set(next) { if (value === props.sentence.content) props.sentence.content = next; } }) },
     '../utils/getArgByKey': { getArgByKey: () => '' },
     '../../ChooseFile/chooseFileConfig': { extNameMap: new Map() },
@@ -399,22 +403,29 @@ test('selecting a model copied after the picker opened refreshes the parameter p
     return harness.render(props);
   }
   let tree = await settle();
-  await nodes(tree, 'ChooseFile')[0].props.onOpen();
+  const figurePicker = nodes(tree, 'GltfFigurePicker')[0];
+  const pickerHarness=await componentHarness('../src/components/gltf/GltfFigurePicker.tsx', {
+    '@/store/useEditorStore':{default:store}, axios:{default:axios},
+    '@/utils/gltf/gltfFigure':gltfFigure,
+    '@/pages/editor/ChooseFile/chooseFileConfig':{extNameMap:new Map()},
+  });
+  let pickerTree=pickerHarness.render(figurePicker.props);
+  await nodes(pickerTree,'ChooseFile')[0].props.onOpen();
+  pickerTree=pickerHarness.render(figurePicker.props);
   tree = await settle();
   // The picker sees revision 8 after copying, while this panel still has 7.
   revision = 8;
-  const picker = nodes(tree, 'ChooseFile')[0];
   assert.equal(nodes(tree, 'Button').filter(button => button.children.includes('2D')).length, 0, 'type switch belongs inside the picker');
-  const typeButtons = nodes(picker.props.toolbar, 'Button');
-  assert.deepEqual(typeButtons.map(button => button.children[0]), ['2D', '3D']);
-  assert.equal(typeButtons[0].props['aria-pressed'], true);
-  assert.equal(typeButtons[1].props['aria-pressed'], false);
+  const typeButtons=nodes(nodes(pickerTree,'ChooseFile')[0].props.toolbar,'Button');
+  assert.deepEqual(typeButtons.map(button=>button.children[0]),['2D','3D']);
+  assert.equal(typeButtons[0].props['aria-pressed'],true);
+  assert.equal(typeButtons[1].props['aria-pressed'],false);
   typeButtons[1].props.onClick();
-  tree = await settle();
-  const selectedTypeButtons = nodes(nodes(tree, 'ChooseFile')[0].props.toolbar, 'Button');
-  assert.equal(selectedTypeButtons[0].props['aria-pressed'], false);
-  assert.equal(selectedTypeButtons[1].props['aria-pressed'], true);
-  await nodes(tree, 'ChooseFile')[0].props.onChange({ name: modelPath, isDir: true });
+  pickerTree=pickerHarness.render(figurePicker.props);
+  const selectedTypeButtons=nodes(nodes(pickerTree,'ChooseFile')[0].props.toolbar,'Button');
+  assert.equal(selectedTypeButtons[0].props['aria-pressed'],false);
+  assert.equal(selectedTypeButtons[1].props['aria-pressed'],true);
+  assert.equal(await nodes(pickerTree,'ChooseFile')[0].props.onChange({name:modelPath,isDir:true}),true);
   tree = await settle();
   const selectors = nodes(tree, 'SearchableCascader');
   assert.equal(selectors.length, 1, 'new model must immediately show glTF motion controls without reopening the picker');
@@ -454,7 +465,7 @@ test('Live2D selectors do not refresh glTF catalogs or reload their model on cat
   assert.equal(selectors[1].props.onOpen, undefined);
   assert.deepEqual([...selectors[0].props.optionList], ['idle']);
   assert.equal(modelReads, 1);
-  nodes(tree, 'ChooseFile').find(node => node.props.onOpen).props.onOpen();
+  nodes(tree, 'GltfFigurePicker')[0].props.onOpen();
   for (let i = 0; i < 4; i++) { tree = harness.render(props); await harness.flush(); }
   assert.equal(posts, 2);
   assert.equal(modelReads, 1);

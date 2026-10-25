@@ -6,7 +6,7 @@ import * as fs from 'fs/promises';
 import { UserDataService } from '../user-data/user-data.service';
 import { checkFileName } from '../../util/checkFileName';
 import { GltfResourceIndexService } from './gltf-resource-index.service';
-import { browseGltfModels, readGltfModel, modelShaderNames } from './gltf-model-packages';
+import { browseGltfModels, readGltfModel, modelShaderNames, GltfModelRole } from './gltf-model-packages';
 import { scanGltfRuntimes } from './gltf-runtime-registry';
 import { gltfEnabled, inside } from './gltf-files';
 
@@ -57,23 +57,26 @@ export class GltfService {
     return join(UserDataService.getGameRoot(), gameName);
   }
 
-  async browseGltfModels(gameName: string, directory: string) {
+  async browseGltfModels(gameName: string, directory: string, role?: GltfModelRole) {
     const root = this.gltfGameRoot(gameName);
     if (typeof directory !== 'string') throw new BadRequestException('Invalid model directory');
+    if (role !== undefined && !['head', 'body'].includes(role)) throw new BadRequestException('Invalid model role');
     if (!await gltfEnabled(root, UserDataService.getEngineTemplateRoot())) return { enabled: false, models: [], issues: [] };
-    try { return { enabled: true, ...await browseGltfModels(root, directory) }; }
+    try { return { enabled: true, ...await browseGltfModels(root, directory, role) }; }
     catch (error) { throw new BadRequestException(error.message); }
   }
 
-  async selectGltfModel(gameName: string, path: string) {
+  async selectGltfModel(gameName: string, path: string, role?: GltfModelRole) {
     const root = this.gltfGameRoot(gameName);
     if (typeof path !== 'string') throw new BadRequestException('Invalid model path');
+    if (role !== undefined && !['head', 'body'].includes(role)) throw new BadRequestException('Invalid model role');
     if (!await gltfEnabled(root, UserDataService.getEngineTemplateRoot())) throw new BadRequestException('当前引擎不支持 glTF 3D模型');
     try {
-      const model = await readGltfModel(root, path);
-      const required = (Array.isArray(model.behaviors) ? model.behaviors : []).filter(item => item?.required !== false).map(item => item?.name).filter(name => typeof name === 'string')
-        .map(name => `behavior:${name}`);
-      required.push(...(await modelShaderNames(root, model)).map(name => `shader:${name}`));
+      const model = await readGltfModel(root, path, role);
+      const required = new Set<string>(model.parts.flatMap(part => Array.isArray(part.behaviors) ? part.behaviors : []).filter(item => item?.required !== false).map(item => item?.name).filter(name => typeof name === 'string')
+        .map(name => `behavior:${name}`));
+      for (const part of model.parts)
+        for (const name of await modelShaderNames(root, part)) required.add(`shader:${name}`);
       const runtimeRoot = join(root, 'game/3d/runtime');
       const names = new Set<string>();
       try {
@@ -88,16 +91,17 @@ export class GltfService {
             else if (component?.type === 'garupa-expression-adapter' && component.motionGroup === model.motionGroup) names.add('adapter');
         }
       } catch {}
-      let missing = required.filter(name => !names.has(name));
+      let missing = [...required].filter(name => !names.has(name));
       if (missing.length || (model.motionGroup && !names.has('adapter'))) {
         const runtime = await scanGltfRuntimes(root);
         this.index.updateGltfRuntimes(gameName, runtime);
         const known = new Set(runtime.resources.map(item => `${item.type}:${item.name}`));
-        missing = required.filter(name => !known.has(name));
+        missing = [...required].filter(name => !known.has(name));
         if (runtime.issues.length) throw new Error(runtime.issues.join('\n'));
       }
       if (missing.length) throw new Error(`缺少模型依赖: ${missing.join(', ')}`);
-      return model;
+      const { parts, ...selected } = model;
+      return selected;
     } catch (error) { throw new BadRequestException(error.message); }
   }
 

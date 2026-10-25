@@ -40,11 +40,30 @@ export async function modelShaderNames(gameRoot: string, model: any) {
     await handle.close();
   }
 }
-export async function readGltfModel(gameRoot: string, modelPath: string) {
+export type GltfModelRole = 'head' | 'body';
+
+export async function readGltfModel(gameRoot: string, modelPath: string, role?: GltfModelRole) {
+  if (/config\.json\+/.test(modelPath)) {
+    const paths = modelPath.split(/(?<=config\.json)\+/);
+    if (paths.length !== 2 || paths.some(path => !/(?:^|\/)config\.json$/.test(path)))
+      throw new Error('头身组合路径必须依次指定头部和身体的 config.json');
+    const head = await readGltfModel(gameRoot, paths[0], 'head');
+    const body = await readGltfModel(gameRoot, paths[1], 'body');
+    if (head.role !== 'head' || body.role !== 'body')
+      throw new Error('头身组合必须依次选择头部和身体，不能使用完整模型代替');
+    if (!head.group || head.group !== body.group)
+      throw new Error('所选头部与身体的模型分组不兼容');
+    if (head.renderProfile !== body.renderProfile)
+      throw new Error('所选头部与身体的渲染配置不兼容');
+    const parts = [head.parts[0], body.parts[0]];
+    return { ...body, role: 'composed', expressionGroups: head.expressionGroups,
+      defaultExpression: head.defaultExpression, preview: head.preview,
+      parts, selectionParts: parts };
+  }
   const root = join(gameRoot, 'game', '3d', 'figure');
   const directory = resolve(
     root,
-    modelPath.endsWith('/config.json') ? dirname(modelPath) : modelPath,
+    /(?:^|\/)config\.json$/.test(modelPath) ? dirname(modelPath) : modelPath,
   );
   if (!inside(root, directory) || !inside(root, await fs.realpath(directory)))
     throw new Error('模型路径超出 3d/figure');
@@ -52,24 +71,38 @@ export async function readGltfModel(gameRoot: string, modelPath: string) {
     manifest = await jsonFile(path);
   if (!Array.isArray(manifest?.components))
     throw new Error('所选文件不是有效的 glTF 3D模型');
-  const models = manifest.components.filter(
-    (component) =>
-      component?.type === 'model' && component.role === 'integrated',
-  );
+  const models = manifest.components.filter(component => component?.type === 'model');
+  const heads = models.filter(component => component.role === 'head');
+  const bodies = models.filter(component => component.role === 'body');
+  const integrated = models.filter(component => component.role === 'integrated');
+  if (heads.length > 1 || bodies.length > 1)
+    throw new Error('不支持一个配置包含多个头部或多个身体，请选择只包含一个头部和一个身体的模型配置');
+  if (integrated.length > 1) throw new Error('暂不支持一个配置包含多个glTF 3D模型');
   if (!models.length)
     throw new Error(
       `所选文件不是有效的 glTF 3D模型（当前文件种类:${manifest.components
         .map((component) => component?.type)
         .join(', ')}）`,
     );
-  if (models.length > 1) throw new Error('暂不支持一个配置包含多个glTF 3D模型');
+  const composed = models.length === 2 && heads.length === 1 && bodies.length === 1;
+  if (!composed && !(models.length === 1 && ['integrated', 'head', 'body'].includes(models[0].role)))
+    throw new Error('所选配置必须包含一个完整模型、单独的头部或身体，或恰好一个头部和一个身体');
+  const selection = role && !integrated.length ? models.filter(component => component.role === role)
+    : composed ? [heads[0], bodies[0]] : models;
+  if (!selection.length) throw new Error(`所选模型包只包含${role === 'head' ? '身体' : '头部'}`);
+  const model = selection.length === 2 ? { ...bodies[0], role: 'composed', expressionGroups: heads[0].expressionGroups,
+    defaultExpression: heads[0].defaultExpression, preview: heads[0].preview } : selection[0];
+  const config = urlPath(join(gameRoot, 'game'), path), relativePath = namePath(root, directory);
+  const parts = selection.map(component => ({ ...component, config, path: relativePath }));
   return {
-    ...models[0],
-    config: urlPath(join(gameRoot, 'game'), path),
-    path: namePath(root, directory),
+    ...model,
+    parts,
+    selectionParts: parts,
+    config,
+    path: relativePath,
   };
 }
-export async function browseGltfModels(gameRoot: string, directory: string) {
+export async function browseGltfModels(gameRoot: string, directory: string, role?: GltfModelRole) {
   const root = join(gameRoot, 'game', '3d', 'figure'),
     path = resolve(root, directory);
   if (!inside(root, path)) throw new Error('模型路径超出 3d/figure');
@@ -96,7 +129,12 @@ export async function browseGltfModels(gameRoot: string, directory: string) {
       while (next < candidates.length) {
         const candidate = candidates[next++];
         try {
-          models.push(await readGltfModel(gameRoot, candidate));
+          const complete = await readGltfModel(gameRoot, candidate);
+          const selected = role ? complete.selectionParts.find(part => part.role === role) : undefined;
+          const { parts, selectionParts, ...model } = selected ?? complete;
+          // Keep model folders selectable so a missing part is reported before entering them.
+          if (role && !selected && model.role !== 'integrated') model.preview = undefined;
+          models.push(model);
         } catch (error) {
           if (error.code !== 'ENOENT')
             issues.push(`${candidate}: ${error.message}`);
