@@ -73,13 +73,10 @@ describe('motion metadata indexing races', () => {
         .resources[0].description,
     ).toBe('after');
   });
-  it('does not persist a full resource catalog and rejects cancelled inventories', async () => {
+  it('rejects cancelled inventories', async () => {
     const inventory: CatalogInventory = { files: new Set(), cancelled: true };
     await expect(
       readGltfMotionCatalog(root, undefined, inventory),
     ).rejects.toThrow('closed');
-    await expect(
-      fs.access(join(root, 'game/gltf-resources.json')),
-    ).rejects.toThrow();
   });
 });

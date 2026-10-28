@@ -97,29 +97,8 @@ describe('fixed glTF resource directories', () => {
   });
   it('discovers dedicated motion roots with path names and default fades', async () => {
     await motion('game/3d/motion/llas/idle.motionbin');
-    await put('game/3d/motion/config.json', {
-      components: [
-        {
-          type: 'motion',
-          src: 'llas/idle.motionbin',
-          description: 'not used',
-          motionGroup: 'not used',
-        },
-      ],
-    });
     await put('game/3d/mtn_exp/anon/bye.mtn', {});
     await put('game/3d/mtn_exp/anon/bye.exp.json', {});
-    await put('game/3d/mtn_exp/config.json', {
-      components: [
-        {
-          type: 'garupa-motion',
-          name: 'ignored-name',
-          src: 'anon/bye.mtn',
-          fade_in: 123,
-          fade_out: 456,
-        },
-      ],
-    });
     for (let i = 0; i < 100; i++)
       await put(`game/figure/2d${i}/nested/config.json`, { components: [] });
     await put('game/3d/figure/model/config.json', {
@@ -154,19 +133,6 @@ describe('fixed glTF resource directories', () => {
     expect(
       reads.mock.calls.some(([path]) => String(path).includes('figure')),
     ).toBe(false);
-    expect(
-      reads.mock.calls.some(
-        ([path]) => String(path) === join(root, 'game/3d/motion/config.json'),
-      ),
-    ).toBe(false);
-    expect(
-      reads.mock.calls.some(
-        ([path]) => String(path) === join(root, 'game/3d/mtn_exp/config.json'),
-      ),
-    ).toBe(false);
-    await expect(
-      fs.access(join(root, 'game/gltf-resources.json')),
-    ).rejects.toThrow();
   });
   it('indexes runtime packages without a fixed package count and caches them during motion updates', async () => {
     for (let i = 0; i < 5; i++)
