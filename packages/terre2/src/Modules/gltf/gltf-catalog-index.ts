@@ -16,6 +16,7 @@ import {
 } from './gltf-motion-catalog';
 import type { CatalogInventory } from './gltf-resource-types';
 import { walk } from './gltf-files';
+import { MotionIndexCache } from './gltf-motion-index-cache';
 
 interface GameIndex {
   inventory: CatalogInventory;
@@ -47,6 +48,7 @@ export class GltfCatalogIndex {
   private recoveries = new Map<string, WatchRecovery>();
   private startupProgress?: ReturnType<typeof setInterval>;
   private publishedState?: string;
+  private readonly motionCache: MotionIndexCache;
 
   constructor(
     private readonly root: string,
@@ -55,7 +57,9 @@ export class GltfCatalogIndex {
     private readonly gameName: string,
     private readonly reportProgress: (message: string) => void = () => {},
     private readonly onSnapshot: (snapshot: any) => void = () => {},
-  ) {}
+  ) {
+    this.motionCache = new MotionIndexCache(join(root, gameName, 'game/3d/motion'), report);
+  }
 
   private publish(state: GameIndex, indexing: boolean) {
     const signature = `${state.revision}:${indexing}:${state.error?.message ?? ''}`;
@@ -137,7 +141,8 @@ export class GltfCatalogIndex {
         `glTF 索引处理中: ${this.gameName}, ${this.ready ? '解析资源元数据' : '发现文件并注册监听'}, ${fileCount()} 个相关文件, 已用时 ${elapsed()}${delay > 1000 ? `, Node 事件循环额外延迟 ${(delay / 1000).toFixed(1)}s` : ''}`,
       );
     }, 10000);
-    this.starting = new Promise<void>((done, reject) => {
+    this.starting = this.motionCache.load(this.state(this.gameName).inventory).then(() => new Promise<void>((done, reject) => {
+      if (this.closed) { done(); return; }
       // Observe the shared parent so a missing motion root can be created later.
       // The ignored predicate only admits the two motion trees.
       this.watcher = watch(join(this.root, this.gameName, 'game/3d'), {
@@ -150,6 +155,8 @@ export class GltfCatalogIndex {
           const location = this.locate(path);
           if (!location) return false;
           const inner = location.inner;
+          if (inner === 'game/3d/motion/.motion-index.json' ||
+              (inner.startsWith('game/3d/motion/.motion-index.json.') && inner.endsWith('.tmp'))) return true;
           // Keep directory ancestors, but exclude scenes, textures and engine assets.
           if (
             inner &&
@@ -213,7 +220,7 @@ export class GltfCatalogIndex {
         await this.flush(this.gameName, state);
         this.reportProgress(`glTF 索引完成: ${this.gameName}, ${state.result?.resources.length ?? 0} 个资源, ${elapsed()}`);
       })().then(done, reject);
-    });
+    }));
     const stopProgress = () => {
       if (this.startupProgress) clearInterval(this.startupProgress);
       this.startupProgress = undefined;
@@ -359,7 +366,9 @@ export class GltfCatalogIndex {
           stat && `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
         // Windows can finish initial watcher registration after directory discovery.
         // Its first add for an indexed file establishes the watch baseline, not a change.
-        if (event === 'add' && state.inventory.files.has(path) && !state.observed.has(path)) {
+        if (event === 'add' && !state.observed.has(path) &&
+            (state.inventory.files.has(path) || (!this.ready && state.inventory.cache?.has(path)))) {
+          state.inventory.files.add(path);
           if (fingerprint) state.observed.set(path, fingerprint);
           return;
         }
@@ -401,6 +410,7 @@ export class GltfCatalogIndex {
               state.result = result;
               state.revision++;
               this.publish(state, true);
+              this.motionCache.schedule(state.inventory);
             },
             this.reportProgress,
           );
@@ -419,6 +429,7 @@ export class GltfCatalogIndex {
           state.revision++;
           state.error = undefined;
           this.publish(state, state.dirty);
+          this.motionCache.schedule(state.inventory);
         } catch (error) {
           state.error = error;
           this.publish(state, false);
@@ -502,6 +513,7 @@ export class GltfCatalogIndex {
     await Promise.allSettled(
       [...this.games.values()].map((state) => state.operation).concat([...this.recoveries.values()].map(recovery => recovery.operation)),
     );
+    await this.motionCache.flush();
     this.games.clear();
     this.recoveries.clear();
   }

@@ -72,6 +72,50 @@ describe('dedicated motion directory watcher', () => {
       expect.objectContaining({ name: 'anon/bye' }),
     ]);
   });
+  it('persists motion metadata and reopens existing paths without reading or stating motion files', async () => {
+    await index.close();
+    const watcher = () => Object.assign(new EventEmitter(), { close: jest.fn(async () => {}) });
+    jest.spyOn(chokidar, 'watch').mockImplementation(watcher as any);
+    const motion = async (name: string, description: string) => {
+      const header = Buffer.from(JSON.stringify({ description, motionGroup: 'test' }));
+      const prefix = Buffer.alloc(12);
+      prefix.write('MOTION\0\0'); prefix.writeUInt32LE(header.length, 8);
+      const path = join(root, game, 'game/3d/motion', name);
+      await fs.writeFile(path, Buffer.concat([prefix, header]));
+      return path;
+    };
+    const kept = await motion('kept.motionbin', '已有动作');
+    await motion('deleted.motionbin', '待删除');
+    index = new GltfCatalogIndex(root, '', () => {}, game);
+    await index.get(game);
+    await index.close();
+    const cachePath = join(root, game, 'game/3d/motion/.motion-index.json');
+    const saved = JSON.parse(await fs.readFile(cachePath, 'utf8'));
+    expect(saved.files['kept.motionbin']).toEqual({ description: '已有动作', motionGroup: 'test' });
+    await fs.unlink(join(root, game, 'game/3d/motion/deleted.motionbin'));
+    await fs.writeFile(kept, 'same path is reused even after an offline replacement');
+    const added = await motion('added.motionbin', '新增动作');
+    const opens = jest.spyOn(fs, 'open');
+    const stats = jest.spyOn(fs, 'stat');
+    index = new GltfCatalogIndex(root, '', () => {}, game);
+    const result = await index.get(game);
+    expect(result.resources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'kept.motionbin', description: '已有动作' }),
+      expect.objectContaining({ name: 'added.motionbin', description: '新增动作' }),
+    ]));
+    expect(result.resources.some(entry => entry.name === 'deleted.motionbin')).toBe(false);
+    expect(opens.mock.calls.map(([path]) => String(path))).toEqual([added]);
+    expect(stats).not.toHaveBeenCalled();
+    await index.close();
+    expect(Object.keys(JSON.parse(await fs.readFile(cachePath, 'utf8')).files).sort()).toEqual(['added.motionbin', 'kept.motionbin']);
+    await fs.unlink(cachePath);
+    await motion('kept.motionbin', '删除缓存后重读');
+    opens.mockClear();
+    index = new GltfCatalogIndex(root, '', () => {}, game);
+    const rebuilt = await index.get(game);
+    expect(rebuilt.resources.find(entry => entry.name === 'kept.motionbin').description).toBe('删除缓存后重读');
+    expect(opens.mock.calls.map(([path]) => String(path)).sort()).toEqual([added, kept].sort());
+  });
   it('does not republish delayed watcher discovery of files already indexed', async () => {
     await index.close();
     const file = await put('game/3d/mtn_exp/anon/bye.mtn', {});
@@ -89,6 +133,31 @@ describe('dedicated motion directory watcher', () => {
     await fs.writeFile(file, '{"updated":true}');
     watcher.emit('all', 'change', file, await fs.stat(file));
     expect((await index.get(game)).revision).toBeGreaterThan(initial.revision);
+  });
+  it('refreshes persisted metadata after a live change and retries truncated files after reopening', async () => {
+    await index.close();
+    const watcher = Object.assign(new EventEmitter(), { close: jest.fn(async () => {}) });
+    jest.spyOn(chokidar, 'watch').mockReturnValue(watcher as any);
+    const file = join(root, game, 'game/3d/motion/idle.motionbin');
+    const write = async (description: string) => {
+      const header = Buffer.from(JSON.stringify({ description })), prefix = Buffer.alloc(12);
+      prefix.write('MOTION\0\0'); prefix.writeUInt32LE(header.length, 8);
+      await fs.writeFile(file, Buffer.concat([prefix, header]));
+    };
+    await fs.writeFile(file, 'partial');
+    index = new GltfCatalogIndex(root, '', () => {}, game);
+    expect((await index.get(game)).issues).toHaveLength(1);
+    await index.close();
+    await write('第一次完整写入');
+    index = new GltfCatalogIndex(root, '', () => {}, game);
+    expect((await index.get(game)).resources[0].description).toBe('第一次完整写入');
+    await write('运行中覆盖');
+    watcher.emit('all', 'change', file, await fs.stat(file));
+    expect((await index.get(game)).resources[0].description).toBe('运行中覆盖');
+    await index.close();
+    const saved = JSON.parse(await fs.readFile(join(root, game, 'game/3d/motion/.motion-index.json'), 'utf8'));
+    expect(saved.files['idle.motionbin'].description).toBe('运行中覆盖');
+    expect(Object.keys(saved.files)).toEqual(['idle.motionbin']);
   });
   it('discovers external additions with default fades and removes deleted parameters', async () => {
     const file = await put('game/3d/mtn_exp/anon/bye.mtn', {});
