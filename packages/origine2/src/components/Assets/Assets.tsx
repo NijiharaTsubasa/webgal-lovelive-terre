@@ -1,6 +1,6 @@
 import { api } from '@/api';
 import { useValue } from '@/hooks/useValue';
-import { ChangeEvent, CSSProperties, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { ChangeEvent, ComponentProps, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import styles from './Assets.module.scss';
 import {
   Badge,
@@ -47,7 +47,7 @@ import {
   MoreVerticalRegular,
   bundleIcon,
 } from '@fluentui/react-icons';
-import { FixedSizeList } from 'react-window';
+import { FixedSizeList, ListChildComponentProps } from 'react-window';
 import AutoSizer from 'react-virtualized-auto-sizer';
 import FileElement from './FileElement';
 import axios from 'axios';
@@ -107,6 +107,23 @@ const GridIcon = bundleIcon(GridFilled, GridRegular);
 const ArrowSortIcon = bundleIcon(ArrowSortFilled, ArrowSortRegular);
 const ArrowSortDownLinesIcon = bundleIcon(ArrowSortDownLinesFilled, ArrowSortDownLinesRegular);
 const ArrowSortUpLinesIcon = bundleIcon(ArrowSortUpLinesFilled, ArrowSortUpLinesRegular);
+
+interface AssetRowData {
+  columnCount: number;
+  files: IFile[];
+  fileProps: (file: IFile) => ComponentProps<typeof FileElement>;
+}
+
+// Keep the row component identity stable when selection or catalog state changes.
+function AssetRow({ index, style, data }: ListChildComponentProps<AssetRowData>) {
+  return (
+    <div style={{ ...style, display: 'grid', gridTemplateColumns: `repeat(${data.columnCount}, 1fr)` }}>
+      {data.files.slice(index * data.columnCount, (index + 1) * data.columnCount).map(file => (
+        <FileElement key={file.path} {...data.fileProps(file)} />
+      ))}
+    </div>
+  );
+}
 
 export default function Assets({
   rootPath,
@@ -261,7 +278,7 @@ export default function Assets({
       scrollToIndex(Math.max(0, Math.floor(index / colsRef.current)));
     }, 100);
     return () => clearTimeout(timer);
-  }, [lastPath.value, sortedFiles]);
+  }, [lastPath.value, files, filterText.value, sortBy, sortOrder, viewType]);
 
   const handleRefresh = () => {
     void refreshModels();
@@ -682,33 +699,16 @@ export default function Assets({
               const columnCount = viewType === 'grid' ? gridCols : listCols;
               colsRef.current = columnCount;
 
-              const rowRenderer = ({ index, style }: { index: number; style: CSSProperties }) => {
-                return (
-                  <div style={{ ...style, display: 'grid', gridTemplateColumns: `repeat(${columnCount}, 1fr)` }}>
-                    {Array.from({ length: columnCount }).map((_, i) => {
-                      const fileIndex = index * columnCount + i;
-                      if (fileIndex >= sortedFiles.length) return null;
-                      return (
-                        <FileElement
-                          key={sortedFiles[fileIndex].name}
-                          rootPath={rootPath}
-                          file={sortedFiles[fileIndex]}
-                          type={viewType}
-                          selected={sortedFiles[fileIndex].path === [...basePath, ...selectedFilePath].join('/')}
-                          desc={models.get(sortedFiles[fileIndex].path)?.description ?? fileConfig?.get(sortedFiles[fileIndex].path)?.desc}
-                          model={models.get(sortedFiles[fileIndex].path)}
-                          loadModelPreview={loadPreview}
-                          isProtected={fileConfig?.get(sortedFiles[fileIndex].path)?.isProtected ?? isProtected}
-                          handleOpenFile={handleOpenFile}
-                          handleBackupFile={handleBackupFile}
-                          handleRenameFile={handleRenameFile}
-                          handleDeleteFile={handleDeleteFile}
-                          checkHasFile={checkHasFile}
-                        />
-                      );
-                    })}
-                  </div>
-                );
+              const itemData: AssetRowData = {
+                columnCount, files: sortedFiles,
+                fileProps: file => ({
+                  rootPath, file, type: viewType,
+                  selected: file.path === [...basePath, ...selectedFilePath].join('/'),
+                  desc: models.get(file.path)?.description ?? fileConfig?.get(file.path)?.desc,
+                  model: models.get(file.path), loadModelPreview: loadPreview,
+                  isProtected: fileConfig?.get(file.path)?.isProtected ?? isProtected,
+                  handleOpenFile, handleBackupFile, handleRenameFile, handleDeleteFile, checkHasFile,
+                }),
               };
 
               return (
@@ -717,9 +717,10 @@ export default function Assets({
                   width={width}
                   itemCount={Math.ceil(sortedFiles.length / columnCount)}
                   itemSize={viewType === 'list' ? 28 : width / columnCount}
+                  itemData={itemData}
                   ref={scrollRef}
                 >
-                  {rowRenderer}
+                  {AssetRow}
                 </FixedSizeList>
               );
             }}
