@@ -34,6 +34,7 @@ export class GltfCatalogWorkerClient {
     private readonly gameName: string,
     private readonly report: (error: Error) => void = () => {},
     private readonly reportProgress: (message: string) => void = () => {},
+    private readonly onChange: () => void = () => {},
   ) {}
 
   start() {
@@ -73,7 +74,10 @@ export class GltfCatalogWorkerClient {
           return;
         }
         if (this.closed) return;
-        if (message.snapshot) this.latest = message.snapshot;
+        if (message.snapshot) {
+          this.latest = message.snapshot;
+          this.onChange();
+        }
         if (message.type === 'progress') this.reportProgress(message.message);
         if (message.type === 'warning') this.report(new Error(message.error));
         if (message.type === 'error') this.fail(new Error(message.error));
@@ -94,6 +98,7 @@ export class GltfCatalogWorkerClient {
     if (this.closed) return;
     this.latest = { ...this.latest, indexing: false, error: error.message };
     this.report(error);
+    this.onChange();
   }
 
   snapshot() {
@@ -105,6 +110,7 @@ export class GltfCatalogWorkerClient {
     this.start();
     if (!this.closed && this.worker && !this.latest.error) {
       this.latest = { ...this.latest, indexing: true };
+      this.onChange();
       try {
         this.worker.postMessage({ type: 'notify', path });
       } catch (error) {

@@ -21,6 +21,43 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   private catalogEpochs = new Map<string, { index: GltfCatalogWorkerClient; revision: number; value: number }>();
   private catalogSnapshots = new Map<string, any>();
 
+  private catalogListeners = new Map<string, Set<() => void>>();
+  private catalogChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  watchGltfCatalog(gameName: string, listener: () => void) {
+    let listeners = this.catalogListeners.get(gameName);
+    if (!listeners) {
+      listeners = new Set();
+      this.catalogListeners.set(gameName, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) {
+        this.catalogListeners.delete(gameName);
+        const timer = this.catalogChangeTimers.get(gameName);
+        if (timer) clearTimeout(timer);
+        this.catalogChangeTimers.delete(gameName);
+      }
+    };
+  }
+
+  getGltfCatalogStatus(gameName: string) {
+    const { resources, issues, ...status } = this.catalogSnapshot(gameName, this.catalogIndexes.get(gameName));
+    return status;
+  }
+
+  private scheduleCatalogChange(gameName: string) {
+    if (!this.catalogListeners.get(gameName)?.size || this.catalogChangeTimers.has(gameName)) return;
+    // Coalesce bursts without postponing updates indefinitely during long imports.
+    const timer = setTimeout(() => {
+      this.catalogChangeTimers.delete(gameName);
+      for (const listener of this.catalogListeners.get(gameName) ?? []) listener();
+    }, 250);
+    timer.unref();
+    this.catalogChangeTimers.set(gameName, timer);
+  }
+
   async gltfCatalogSession(gameName: string, sessionId: string, active: boolean) {
     const root = UserDataService.getGameRoot();
     if (this.catalogRoot !== undefined && this.catalogRoot !== root) await this.onModuleDestroy();
@@ -38,7 +75,7 @@ export class GltfResourceIndexService implements OnModuleDestroy {
       this.catalogIdleTimers.delete(gameName);
       // A reconnect may arrive while the previous worker is still draining.
       // Snapshot reads stay non-blocking, but a live connection must eventually
-      // own a worker even when browser polling is suspended.
+      // own a worker even when no catalog read is pending.
       if (this.catalogClosing.has(gameName)) await this.catalogClosing.get(gameName);
       if (this.catalogSessions.get(gameName)?.has(sessionId)) await this.getCatalogIndex(gameName);
     } else {
@@ -119,6 +156,7 @@ export class GltfResourceIndexService implements OnModuleDestroy {
         gameName,
         (error) => this.logger.warn(`glTF 资源索引未更新: ${error.message}`),
         (message) => this.logger.log(message),
+        () => this.scheduleCatalogChange(gameName),
       );
       this.catalogIndexes.set(gameName, index);
       index.start();
@@ -134,6 +172,8 @@ export class GltfResourceIndexService implements OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    for (const timer of this.catalogChangeTimers.values()) clearTimeout(timer);
+    this.catalogChangeTimers.clear();
     for (const timer of this.catalogIdleTimers.values()) clearTimeout(timer);
     this.catalogIdleTimers.clear();
     await Promise.all([...this.catalogIndexes.values()].map(index => index.close()));
@@ -203,7 +243,10 @@ export class GltfResourceIndexService implements OnModuleDestroy {
     if (inner && !['game', 'game/3d', 'game/3d/motion', 'game/3d/mtn_exp'].includes(inner) &&
         !inner.startsWith('game/3d/motion/') && !inner.startsWith('game/3d/mtn_exp/')) return operation();
     const names = rel ? [rel.split(sep)[0]] : [...new Set([...this.catalogIndexes.keys(), ...this.catalogSessions.keys()])];
-    for (const name of names) this.catalogSuspensions.set(name, (this.catalogSuspensions.get(name) ?? 0) + 1);
+    for (const name of names) {
+      this.catalogSuspensions.set(name, (this.catalogSuspensions.get(name) ?? 0) + 1);
+      this.scheduleCatalogChange(name);
+    }
     try {
       await Promise.all(names.map(async name => {
         const index = this.catalogIndexes.get(name);
@@ -222,6 +265,7 @@ export class GltfResourceIndexService implements OnModuleDestroy {
         else {
           this.catalogSuspensions.delete(name);
           if (this.catalogSessions.get(name)?.size) await this.getCatalogIndex(name);
+          this.scheduleCatalogChange(name);
         }
       }
     }

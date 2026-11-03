@@ -490,13 +490,13 @@ test('shared catalog conditionally retains resources and issues, clears recovere
     if (name === '@/utils/eventBus') return { eventBus: { emit() {} } };
     return {};
   } });
-  module.exports.default('project', true);
-  assert.equal(options.refreshInterval({ indexing: true }), 750);
-  assert.equal(options.refreshInterval({ indexing: false }), 5000);
+  module.exports.default('project');
+  assert.equal(options.revalidateOnFocus, false);
+  assert.equal(options.revalidateOnReconnect, false);
   stored = await fetcher();
   assert.equal('revision' in calls[0], false, 'a new cache always asks for a full snapshot');
   reply = { enabled: true, revision: 1, indexing: false, unchanged: true };
-  module.exports.default('project', true);
+  module.exports.default('project');
   const [first, second] = await Promise.all([fetcher(), fetcher()]);
   assert.equal(calls.length, 2, 'concurrent consumers reuse one pending request');
   assert.equal(calls[1].revision, 1);
@@ -509,7 +509,7 @@ test('shared catalog conditionally retains resources and issues, clears recovere
   reply = { enabled: false, revision: 2, resources: [] };
   await fetcher();
   assert.equal('revision' in calls[2], false, 'a different project cannot inherit a previous revision');
-  assert.equal(options.refreshInterval, 0, 'picker consumers do not establish their own polling loops');
+  assert.equal(options.refreshInterval, undefined);
 });
 
 test('catalog progress and completion never reload the game preview', async () => {
@@ -525,19 +525,19 @@ test('catalog progress and completion never reload the game preview', async () =
     if (name === '@/utils/eventBus') return { eventBus: { emit: (...args) => events.push(args) } };
     return {};
   } });
-  module.exports.default('project', true);
+  module.exports.default('project');
   for (let revision = 2; revision <= 5; revision++) {
     stored = { ...stored, revision };
-    module.exports.default('project', true);
+    module.exports.default('project');
   }
   assert.equal(events.length, 0);
   stored = { ...stored, revision: 6, indexing: false };
-  module.exports.default('project', true);
+  module.exports.default('project');
   assert.equal(events.length, 0);
-  module.exports.default('project', true);
+  module.exports.default('project');
   assert.equal(events.length, 0);
   stored = { ...stored, revision: 7, enabled: false };
-  module.exports.default('project', true);
+  module.exports.default('project');
   assert.equal(events.length, 0);
 });
 
@@ -551,6 +551,8 @@ test('project session uses a persistent connection and closes it on page exit or
     static CLOSED = 2;
     readyState = 1;
     constructor(url) { this.url = url; streams.push(this); }
+    addEventListener() {}
+    removeEventListener() {}
     close() { this.readyState = EventSource.CLOSED; }
   }
   const module = { exports: {} };

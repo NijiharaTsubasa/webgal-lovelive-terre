@@ -20,6 +20,8 @@ describe('GltfService', () => {
     getGltfCatalog: jest.fn(),
     gltfCatalogSession: jest.fn(),
     updateGltfRuntimes: jest.fn(),
+    watchGltfCatalog: jest.fn(),
+    getGltfCatalogStatus: jest.fn(),
   };
   let root: string;
 
@@ -27,6 +29,8 @@ describe('GltfService', () => {
     index.getGltfCatalog.mockReset().mockResolvedValue(catalog);
     index.gltfCatalogSession.mockReset().mockResolvedValue({ ok: true });
     index.updateGltfRuntimes.mockReset();
+    index.watchGltfCatalog.mockReset().mockReturnValue(jest.fn());
+    index.getGltfCatalogStatus.mockReset().mockReturnValue({ enabled: true, revision: 4, indexing: false });
     root = await fs.mkdtemp(join(tmpdir(), 'terre-model-select-'));
     jest.spyOn(UserDataService, 'getGameRoot').mockReturnValue(root);
     jest.spyOn(UserDataService, 'getEngineTemplateRoot').mockReturnValue(root);
@@ -115,6 +119,27 @@ describe('GltfService', () => {
       expect(index.gltfCatalogSession).toHaveBeenCalledWith('demo', opens[1][1], false);
       expect(jest.getTimerCount()).toBe(0);
     } finally { first.unsubscribe(); second.unsubscribe(); jest.useRealTimers(); }
+  });
+
+  it('pushes catalog status changes and keeps heartbeats separate from invalidations', async () => {
+    jest.useFakeTimers();
+    const stop = jest.fn();
+    let changed: () => void;
+    index.watchGltfCatalog.mockImplementation((_, listener) => { changed = listener; return stop; });
+    const messages: any[] = [];
+    const subscription = service.gltfCatalogSession('demo').subscribe(message => messages.push(message));
+    try {
+      await Promise.resolve();
+      expect(messages[0]).toEqual({ type: 'catalog', data: { enabled: true, revision: 4, indexing: false } });
+      index.getGltfCatalogStatus.mockReturnValue({ enabled: true, revision: 5, indexing: true });
+      changed();
+      expect(messages.at(-1).data).toMatchObject({ revision: 5, indexing: true });
+      await jest.advanceTimersByTimeAsync(15000);
+      expect(messages.at(-1)).toEqual({ type: 'heartbeat', data: { active: true } });
+      expect(index.getGltfCatalog).not.toHaveBeenCalled();
+      subscription.unsubscribe();
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally { subscription.unsubscribe(); jest.useRealTimers(); }
   });
 
   it('releases a stream closed while initialization is pending', async () => {

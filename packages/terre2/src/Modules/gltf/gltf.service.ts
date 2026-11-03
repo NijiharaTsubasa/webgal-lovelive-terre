@@ -36,15 +36,18 @@ export class GltfService {
     this.gltfGameRoot(gameName);
     return new Observable(subscriber => {
       const sessionId = randomUUID();
+      const publish = () => subscriber.next({ type: 'catalog', data: this.index.getGltfCatalogStatus(gameName) });
+      const unwatch = this.index.watchGltfCatalog(gameName, publish);
       // Server-side traffic keeps the stream alive without relying on background
       // browser timers. Nest unsubscribes when the HTTP connection closes.
-      const timer = setInterval(() => subscriber.next({ data: { active: true } }), 15000);
+      const timer = setInterval(() => subscriber.next({ type: 'heartbeat', data: { active: true } }), 15000);
       timer.unref();
       void this.index.gltfCatalogSession(gameName, sessionId, true)
-        .then(() => subscriber.next({ data: { active: true } }))
+        .then(publish)
         .catch(error => subscriber.error(error));
       return () => {
         clearInterval(timer);
+        unwatch();
         void this.index.gltfCatalogSession(gameName, sessionId, false)
           .catch(error => console.warn('glTF project session could not be released:', error));
       };
