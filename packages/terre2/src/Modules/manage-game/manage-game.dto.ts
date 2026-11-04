@@ -89,6 +89,8 @@ export class GameInfoDto {
   name: string;
   @ApiProperty({ description: 'The dir of the game' })
   dir: string;
+  @ApiProperty()
+  gltfEnabled: boolean;
   @ApiProperty({ description: 'The cover of the game' })
   cover: string;
   @ApiProperty({

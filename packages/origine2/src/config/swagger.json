@@ -1868,6 +1868,9 @@
             "type": "string",
             "description": "The dir of the game"
           },
+          "gltfEnabled": {
+            "type": "boolean"
+          },
           "cover": {
             "type": "string",
             "description": "The cover of the game"
@@ -1885,6 +1888,7 @@
         "required": [
           "name",
           "dir",
+          "gltfEnabled",
           "cover",
           "template"
         ]

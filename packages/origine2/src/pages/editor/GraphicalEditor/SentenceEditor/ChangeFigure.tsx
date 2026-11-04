@@ -5,7 +5,7 @@ import ChooseFile from "../../ChooseFile/ChooseFile";
 import { useValue } from "../../../../hooks/useValue";
 import { getArgByKey } from "../utils/getArgByKey";
 import TerreToggle from "../../../../components/terreToggle/TerreToggle";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { TerrePanel } from "@/pages/editor/GraphicalEditor/components/TerrePanel";
 import { Button, Input } from "@fluentui/react-components";
@@ -23,7 +23,7 @@ import { useGlobalEffectEditor } from "@/hooks/useGlobalEffectEditor";
 import { IgnoreDefaultOption } from "../components/IgnoreDefaultOption";
 import { gltfFigureOptions, isGltfConfigPath, NativeExpressionOptions } from "@/utils/gltf/gltfFigure";
 import GltfExpressionPicker from '@/components/gltf/GltfExpressionPicker';
-import useGltfCatalog from '@/hooks/gltf/useGltfCatalog';
+import useGltfCatalog, { GltfCatalogEnabledContext } from '@/hooks/gltf/useGltfCatalog';
 import GltfFigurePicker from '@/components/gltf/GltfFigurePicker';
 import { splitFigureConfigs, figurePartConfig } from '@/utils/gltf/figureComposition';
 
@@ -71,7 +71,8 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
   const [spineSkinsList, setSpineSkinsList] = useState<string[]>([]);
   const [isSpineJsonFormat, setIsSpineJsonFormat] = useState(false);
   const [isJsonlFormat, setIsJsonlFormat] = useState(false);
-  const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gameDir);
+  const gltfEnabled = useContext(GltfCatalogEnabledContext);
+  const { catalog: gltfCatalog, refresh: refreshGltfCatalog } = useGltfCatalog(gltfEnabled ? gameDir : undefined);
   const [isGltfFormat, setIsGltfFormat] = useState(false);
   const [isConfigLive2D, setIsConfigLive2D] = useState(false);
   const [supportsLive2DExpressions, setSupportsLive2DExpressions] = useState(false);

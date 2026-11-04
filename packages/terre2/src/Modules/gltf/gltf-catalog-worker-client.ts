@@ -21,7 +21,7 @@ export class GltfCatalogWorkerClient {
   private closing?: Promise<void>;
   private drained?: () => void;
   private latest: GltfCatalogSnapshot = {
-    enabled: true,
+    enabled: false,
     resources: [],
     issues: [],
     revision: -1,

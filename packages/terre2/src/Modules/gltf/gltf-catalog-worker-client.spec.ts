@@ -21,6 +21,7 @@ describe('GltfCatalogWorkerClient', () => {
   it('returns an immediate snapshot and publishes asynchronous index changes', async () => {
     const background = new GltfCatalogWorkerClient('games', 'engine', 'test');
     expect(background.snapshot()).toMatchObject({
+      enabled: false,
       resources: [],
       indexing: true,
     });

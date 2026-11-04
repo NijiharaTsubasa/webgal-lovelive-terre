@@ -16,6 +16,7 @@ import { execFile } from 'child_process';
 import { join } from 'path';
 import { UserDataService } from '../user-data/user-data.service';
 import { GltfResourceIndexService } from '../gltf/gltf-resource-index.service';
+import { gltfEnabled } from '../gltf/gltf-files';
 
 @Injectable()
 export class ManageGameService {
@@ -55,6 +56,7 @@ export class ManageGameService {
             dir: item.name,
             cover: gameConfig.Title_img,
             template: templateConfig,
+            gltfEnabled: await gltfEnabled(join(path, gameDir), UserDataService.getEngineTemplateRoot()),
           };
         } catch (_) {
           return null;

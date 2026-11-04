@@ -5,7 +5,7 @@ import { GameEditorContext, createGameEditorStore } from "@/store/useGameEditorS
 import { Spinner } from "@fluentui/react-components";
 import { ReactNode, useRef } from "react";
 import useSWR from "swr";
-import { useGltfCatalogSession } from '@/hooks/gltf/useGltfCatalog';
+import { GltfCatalogEnabledContext, useGltfCatalogSession } from '@/hooks/gltf/useGltfCatalog';
 
 const GameEditorProvider = ({ children }: { children: ReactNode }) => {
   const page = useEditorStore.use.page();
@@ -17,9 +17,9 @@ const GameEditorProvider = ({ children }: { children: ReactNode }) => {
 
   const { data: gameList, isLoading: gameListLoading } = useSWR("game-list", gameListFetcher);
   const fristLoading = gameListLoading && !gameList;
-  const inGameList = gameList && gameList.length > 0 && gameList.some((game) => game.dir === gameDir);
+  const game = gameList?.find((game) => game.dir === gameDir);
 
-  if (!fristLoading && !inGameList) {
+  if (!fristLoading && !game) {
     goTo('dashboard', 'game');
   }
 
@@ -31,18 +31,18 @@ const GameEditorProvider = ({ children }: { children: ReactNode }) => {
           <Spinner labelPosition="below" label={gameDir} />
         </div>
       }
-      {inGameList && !fristLoading && <GameEditorContextProvider key={gameDir}>{children}</GameEditorContextProvider>}
+      {game && !fristLoading && <GameEditorContextProvider key={gameDir} gltfEnabled={game.gltfEnabled}>{children}</GameEditorContextProvider>}
     </>
   );
 };
 
-const GameEditorContextProvider = ({ children }: { children: ReactNode }) => {
+const GameEditorContextProvider = ({ children, gltfEnabled }: { children: ReactNode; gltfEnabled: boolean }) => {
   const gameDir = useEditorStore.use.subPage();
-  useGltfCatalogSession(gameDir);
+  useGltfCatalogSession(gltfEnabled ? gameDir : undefined);
   const gameEditorStore = useRef(createGameEditorStore(gameDir)).current;
   return (
     <GameEditorContext.Provider value={gameEditorStore}>
-      {children}
+      <GltfCatalogEnabledContext.Provider value={gltfEnabled}>{children}</GltfCatalogEnabledContext.Provider>
     </GameEditorContext.Provider>
   );
 };

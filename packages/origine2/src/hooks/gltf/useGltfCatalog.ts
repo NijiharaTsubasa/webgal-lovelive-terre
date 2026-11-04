@@ -1,9 +1,10 @@
-import { useCallback, useEffect } from 'react';
+import { createContext, useCallback, useEffect } from 'react';
 import axios from 'axios';
 import useSWR from 'swr';
 import { GltfCatalogResult } from '@/utils/gltf/gltfFigure';
 
 const EMPTY_CATALOG: GltfCatalogResult = { enabled: false, resources: [], revision: 0 };
+export const GltfCatalogEnabledContext = createContext(false);
 const requests = new Map<string, Promise<GltfCatalogResult>>();
 const snapshots = new Map<string, GltfCatalogResult>();
 type CatalogReply = (GltfCatalogResult & { unchanged?: false }) | {
@@ -45,9 +46,10 @@ export default function useGltfCatalog(game: string | undefined) {
   return { catalog: result.data ?? EMPTY_CATALOG, refresh, error: result.error };
 }
 
-export function useGltfCatalogSession(game: string) {
+export function useGltfCatalogSession(game: string | undefined) {
   const { refresh } = useGltfCatalog(game);
   useEffect(() => {
+    if (!game) return;
     let session: EventSource;
     let disposed = false;
     let refreshing = false;

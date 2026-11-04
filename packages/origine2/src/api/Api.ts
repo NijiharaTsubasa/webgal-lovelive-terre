@@ -158,6 +158,7 @@ export interface GameInfoDto {
   name: string;
   /** The dir of the game */
   dir: string;
+  gltfEnabled: boolean;
   /** The cover of the game */
   cover: string;
   /** The template config of the game */
