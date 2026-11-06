@@ -32,6 +32,18 @@ type AnimationFlag = "" | "on";
 type LoopMode = "true" | "false" | "disappear";
 type PanelType = "effect" | "moreOptions";
 
+interface SharedNamedOption {
+  type: 'motion' | 'expression';
+  url: string;
+  path: string[];
+}
+
+declare global {
+  interface Window {
+    __webgalLoveLiveSharedNamedOptions?: () => Promise<SharedNamedOption[]>;
+  }
+}
+
 // eslint-disable-next-line complexity
 export default function ChangeFigure(props: ISentenceEditorProps) {
   const gameDir = useEditorStore.use.subPage();
@@ -87,6 +99,30 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
     getArgByKey(props.sentence, "expression").toString() ?? ""
   );
   const currentSkin = useValue(getArgByKey(props.sentence, "skin").toString() ?? "");
+  const loadSharedNamed = isGltfFormat ? window.__webgalLoveLiveSharedNamedOptions : undefined;
+  const [sharedNamed, setSharedNamed] = useState<SharedNamedOption[]>([]);
+  const [sharedNamedError, setSharedNamedError] = useState(false);
+  const sharedPaths = useMemo(() => ({
+    motion: new Map(sharedNamed.filter(item => item.type === 'motion').map(item => [item.url, item.path])),
+    expression: new Map(sharedNamed.filter(item => item.type === 'expression').map(item => [item.url, item.path])),
+  }), [sharedNamed]);
+  async function refreshSharedNamed() {
+    if (!loadSharedNamed) return;
+    try {
+      setSharedNamed(await loadSharedNamed());
+      setSharedNamedError(false);
+    } catch {
+      setSharedNamedError(true);
+    }
+  }
+  useEffect(() => {
+    if (loadSharedNamed && [currentMotion.value, currentExpression.value].some(value => value.includes('/webvideo-shared/')))
+      void refreshSharedNamed();
+  }, [loadSharedNamed, gameDir]);
+  function refreshFigureOptions() {
+    void refreshGltfCatalog();
+    void refreshSharedNamed();
+  }
 
   const figurePositions = new Map<FigurePosition, string>([
     ["left", t`左侧`],
@@ -778,24 +814,27 @@ export default function ChangeFigure(props: ISentenceEditorProps) {
         <>
           <CommonOptions key="24" title={isGltfFormat ? '3D/Live2D 动作' : isSpineJsonFormat ? t`Spine 动画` : t`Live2D 动作`}>
             <SearchableCascader
-              optionList={l2dMotionsList}
+              optionList={loadSharedNamed ? [...l2dMotionsList, ...sharedPaths.motion.keys()] : l2dMotionsList}
+              optionPaths={loadSharedNamed ? sharedPaths.motion : undefined}
               optionDescriptions={isGltfFormat ? motionDescriptions : undefined}
               value={currentMotion.value}
-              onOpen={isGltfFormat ? () => { void refreshGltfCatalog(); } : undefined}
+              onOpen={isGltfFormat ? refreshFigureOptions : undefined}
               onValueChange={(newValue) => {
                 newValue && currentMotion.set(newValue);
                 submit();
               }}
             />
+            {loadSharedNamed && sharedNamedError && <span role="status">共享素材读取失败，重新打开列表可重试。</span>}
           </CommonOptions>
           {!isSpineJsonFormat && (
             <CommonOptions key="25" title={isGltfFormat ? (supportsLive2DExpressions ? '3D/Live2D 表情' : '3D 表情(当前模型不支持 Live2D 表情)') : t`Live2D 表情`}>
               {isGltfFormat ? (expressionOptionsReady ? <GltfExpressionPicker
                 native={nativeExpressions}
-                live2d={l2dExpressionsList}
+                live2d={loadSharedNamed ? [...l2dExpressionsList, ...sharedPaths.expression.keys()] : l2dExpressionsList}
+                live2dPaths={loadSharedNamed ? sharedPaths.expression : undefined}
                 supportsLive2D={supportsLive2DExpressions}
                 value={currentExpression.value}
-                onOpen={() => { void refreshGltfCatalog(); }}
+                onOpen={refreshFigureOptions}
                 onValueChange={newValue => { currentExpression.set(newValue); submit(); }}
               /> : <span role="status">正在读取表情选项…</span>) : <SearchableCascader
                 optionList={l2dExpressionsList}

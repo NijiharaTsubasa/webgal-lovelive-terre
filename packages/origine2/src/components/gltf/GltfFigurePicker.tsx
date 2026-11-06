@@ -19,12 +19,28 @@ interface Props {
   onOpen?: () => void;
 }
 
+export interface SharedFigureSelection {
+  reference: string;
+  open: (role?: FigureRole) => void;
+  onTabChange: (shared: boolean) => void;
+  onStandaloneHighlight: (standalone: boolean) => void;
+  previewPath: (path: string) => Promise<string>;
+}
+
+type FigureDraft = Partial<Record<FigureRole, FigurePart>>;
+
+function figurePath(head: FigurePart, body: FigurePart) {
+  return head.configPath === body.configPath ? head.configPath : `${head.configPath}+${body.configPath}`;
+}
+
 /** Owns the uncommitted figure selection; the shared file browser only supplies files. */
 export default function GltfFigurePicker({ value, enabled, placeholder, onChange, onOpen }: Props) {
   const gameName = useEditorStore.use.subPage();
   const [is3D, setIs3D] = useState(() => enabled && preferredFigure3D(value, placeholder));
   const [composing, setComposing] = useState(false);
-  const [draft, setDraft] = useState<Partial<Record<FigureRole, FigurePart>>>({});
+  const [draft, setDraft] = useState<FigureDraft>({});
+  const [sharedTab, setSharedTab] = useState(false);
+  const [sharedStandalone, setSharedStandalone] = useState(false);
   const [role, setRole] = useState<FigureRole>('head');
   const [browsePath, setBrowsePath] = useState<string>();
   const [error, setError] = useState('');
@@ -36,6 +52,7 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
     setBusy(value);
   }
   const compatibilityError = figureCombinationError(draft.head, draft.body);
+  const showComposition = is3D && composing && !(sharedTab && sharedStandalone);
   const report = (failure: unknown) =>
     setError(
       axios.isAxiosError(failure) ? String(failure.response?.data?.message ?? failure.message)
@@ -50,21 +67,47 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
       })
     ).data;
 
-  function commit(path: string) {
-    rememberFigureMode(is3D);
+  function commit(path: string, as3D = is3D) {
+    rememberFigureMode(as3D);
     onChange(path);
   }
-  function begin() {
+  async function selectDraft(path: string, forPreview = false) {
+    const followBody = composing && role === 'head' && !!draft.head
+      && draft.head.configPath === draft.body?.configPath;
+    const otherRole = role === 'head' ? 'body' : 'head';
+    const usePackage = forPreview && composing && !draft[otherRole];
+    const data = await select(path, composing && !followBody && !usePackage ? role : undefined);
+    if (data.error) throw Error(String(data.error));
+    if (data.role === 'integrated') return undefined;
+    if (composing && !data.selectionParts?.some((part: FigurePart) => part.role === role))
+      throw Error(role === 'head' ? '所选模型包只包含身体' : '所选模型包只包含头部');
+    const next = { ...draft };
+    if (followBody) delete next.body;
+    for (const part of data.selectionParts ?? [])
+      if (part.role === 'head' || part.role === 'body')
+        next[part.role as FigureRole] = { ...part, configPath: path };
+    return next;
+  }
+  async function previewPath(path: string) {
+    const next = await selectDraft(path, true);
+    if (!next) return path;
+    if (!next.head || !next.body) throw Error(next.head ? '缺少身体，无法预览。' : '缺少头部，无法预览。');
+    const problem = figureCombinationError(next.head, next.body);
+    if (problem) throw Error(problem);
+    return figurePath(next.head, next.body);
+  }
+  function begin(sharedRole?: FigureRole) {
     const token = ++epoch.current;
     const use3D = enabled && preferredFigure3D(value, placeholder);
     setIs3D(use3D);
     setComposing(false);
+    setSharedStandalone(false);
     setDraft({});
-    setRole('head');
+    setRole(sharedRole ?? 'head');
     setError('');
     markBusy(false);
     const paths = use3D && isGltfConfigPath(value) ? splitFigureConfigs(value) : [];
-    setBrowsePath(paths[0] ?? (!use3D && value !== placeholder && value !== 'none' ? value : undefined));
+    setBrowsePath(sharedRole ? undefined : paths[0] ?? (!use3D && value !== placeholder && value !== 'none' ? value : undefined));
     onOpen?.();
     if (!paths.length) return;
     if (paths.length > 2) {
@@ -92,7 +135,7 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
         if (Object.keys(next).length) {
           setDraft(next);
           setComposing(true);
-          setRole('head');
+          setRole(sharedRole ?? 'head');
         }
       })
       .catch((failure) => {
@@ -186,7 +229,14 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
         selectionDisabled={busy}
         selectedFilePath={browsePath}
         chooseModelDirectory={is3D}
-        onOpen={begin}
+        sharedFigure={{
+          reference: value,
+          open: begin,
+          onTabChange: setSharedTab,
+          onStandaloneHighlight: setSharedStandalone,
+          previewPath,
+        }}
+        onOpen={() => begin()}
         onClose={() => {
           epoch.current++;
           markBusy(false);
@@ -218,7 +268,7 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
           )
         }
         sidebar={
-          is3D && composing ? (
+          showComposition ? (
             <>
               {card('head')}
               {card('body')}
@@ -228,13 +278,16 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
         footer={(close) => (
           <div style={{ padding: '8px 12px', borderTop: 'var(--border-sm)' }}>
             {busy && <div role="status">正在读取模型…</div>}
-            {(error || compatibilityError) && (
+            {(error || (showComposition && compatibilityError)) && (
               <div role="alert" style={{ color: 'var(--colorPaletteRedForeground1)', whiteSpace: 'pre-wrap' }}>
-                {error || compatibilityError}
+                {error || (showComposition && compatibilityError)}
               </div>
             )}
-            {is3D && composing && (
+            {showComposition && (
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+                {sharedTab && <span style={{ alignSelf: 'center', marginRight: 'auto', fontSize: 12 }}>
+                  点击「引用共享素材」替换当前{role === 'head' ? '头部' : '身体'}。
+                </span>}
                 <Button onClick={close}>取消</Button>
                 <Button
                   appearance="primary"
@@ -244,8 +297,7 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
                     const token = ++epoch.current;
                     markBusy(true);
                     setError('');
-                  const path = draft.head.configPath === draft.body.configPath
-                    ? draft.head.configPath : `${draft.head.configPath}+${draft.body.configPath}`;
+                    const path = figurePath(draft.head, draft.body);
                     try {
                       const data = await select(path);
                       if (token !== epoch.current) return;
@@ -274,8 +326,9 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
         onChange={async (file) => {
           if (!file) return false;
           if (reading.current) return false;
-          if (!is3D) {
-            commit(file.name);
+          const selectedIs3D = file.webVideoFigureType ? file.webVideoFigureType === '3d' : is3D;
+          if (!selectedIs3D) {
+            commit(file.name, false);
             return true;
           }
           const token = ++epoch.current;
@@ -283,22 +336,13 @@ export default function GltfFigurePicker({ value, enabled, placeholder, onChange
           markBusy(true);
           const path = file.isDir ? `${file.name}/config.json` : file.name;
           try {
-            const followBody = composing && role === 'head' && !!draft.head
-              && draft.head.configPath === draft.body?.configPath;
-            const data = await select(path, composing && !followBody ? role : undefined);
+            const next = await selectDraft(path);
             if (token !== epoch.current) return false;
-            if (data.error) throw Error(String(data.error));
-            if (data.role === 'integrated') {
-              commit(path);
+            if (!next) {
+              commit(path, true);
               return true;
             }
-            if (followBody && !data.selectionParts?.some((part: FigurePart) => part.role === 'head'))
-              throw Error('所选模型包只包含身体');
-            const next = { ...draft };
-            if (followBody) delete next.body;
-            for (const part of data.selectionParts ?? [])
-              if (part.role === 'head' || part.role === 'body')
-                next[part.role as FigureRole] = { ...part, configPath: path };
+            setIs3D(true);
             setDraft(next);
             setComposing(true);
             if (!next.head) setRole('head');

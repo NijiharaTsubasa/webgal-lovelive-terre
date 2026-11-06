@@ -67,6 +67,7 @@ export interface IFile {
   path: string;
   size?: number;
   lastModified?: number;
+  webVideoFigureType?: '2d' | '3d';
 }
 
 interface IAssetsReadResponse {

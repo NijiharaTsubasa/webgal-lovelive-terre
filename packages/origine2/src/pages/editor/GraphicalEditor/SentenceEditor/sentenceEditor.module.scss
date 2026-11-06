@@ -26,9 +26,23 @@
 }
 
 .filePreviewRow {
-  display: inline-flex;
+  display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 6px;
+
+  > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  > :not(span) {
+    flex-shrink: 0;
+  }
 }
 
 .flex1 {

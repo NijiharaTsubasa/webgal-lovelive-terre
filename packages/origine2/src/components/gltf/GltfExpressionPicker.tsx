@@ -8,6 +8,7 @@ import { preferredExpressionMode, rememberExpressionMode } from '@/utils/gltf/gl
 interface Props {
   native: NativeExpressionOptions;
   live2d: string[];
+  live2dPaths?: ReadonlyMap<string, readonly string[]>;
   supportsLive2D: boolean;
   value: string;
   onOpen?: () => void;
@@ -23,6 +24,7 @@ export default function GltfExpressionPicker(props: Props) {
   const [level, setLevel] = useState(0);
   const [search, setSearch] = useState(['', '', '']);
   const selected = decodeNativeExpression(props.value);
+  const sharedLabel = props.live2dPaths?.get(props.value)?.join(' > ');
   const mode = props.supportsLive2D ? chosenMode ?? initialExpressionMode(props.value, true, props.live2d) : '3d';
   const columns = props.native.faces?.length ? [
     { key: 'face' as const, title: '3D表情', names: props.native.faces },
@@ -44,14 +46,14 @@ export default function GltfExpressionPicker(props: Props) {
     setOpen(data.open);
   }} positioning="after" withArrow>
     <PopoverTrigger disableButtonEnhancement>
-      <Button className={styles.trigger}>{selected ? selected.face ?? [selected.eye, selected.closed, selected.open].map(name => name || '无').join(' / ') : props.value || '选择表情'}</Button>
+      <Button className={styles.trigger}>{selected ? selected.face ?? [selected.eye, selected.closed, selected.open].map(name => name || '无').join(' / ') : sharedLabel || props.value || '选择表情'}</Button>
     </PopoverTrigger>
     <PopoverSurface className={styles.surface}>
       {props.supportsLive2D && <div className={styles.modes} aria-label="切换表情类型">
         <Button appearance={mode === '3d' ? 'primary' : 'secondary'} onClick={() => { rememberExpressionMode('3d'); setMode('3d'); }}>3D</Button>
         <Button appearance={mode === 'live2d' ? 'primary' : 'secondary'} onClick={() => { rememberExpressionMode('live2d'); setMode('live2d'); }}>Live2D</Button>
       </div>}
-      {mode === 'live2d' && props.supportsLive2D ? <SearchableCascader optionList={props.live2d}
+      {mode === 'live2d' && props.supportsLive2D ? <SearchableCascader optionList={props.live2d} optionPaths={props.live2dPaths}
         value={props.value.startsWith('3d:') ? '' : props.value} onValueChange={value => {
           if (value) { rememberExpressionMode('live2d'); props.onValueChange(value); setOpen(false); }
         }} /> : <div className={styles.columns}>

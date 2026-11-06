@@ -7,6 +7,7 @@ import { api } from "@/api";
 import { t } from "@lingui/macro";
 import Assets, { IFile, IFileConfig, IFileFunction } from "@/components/Assets/Assets";
 import { ReactNode, useCallback, useEffect, useRef } from "react";
+import type { SharedFigureSelection } from '@/components/gltf/GltfFigurePicker';
 import { bundleIcon, DismissFilled, DismissRegular, WarningFilled, WarningRegular } from "@fluentui/react-icons";
 
 const DismissIcon = bundleIcon(DismissFilled, DismissRegular);
@@ -30,6 +31,7 @@ export interface IChooseFile {
   onClose?: () => void;
   deferClose?: boolean;
   selectionDisabled?: boolean;
+  sharedFigure?: SharedFigureSelection;
 }
 
 export default function ChooseFile(props: IChooseFile) {

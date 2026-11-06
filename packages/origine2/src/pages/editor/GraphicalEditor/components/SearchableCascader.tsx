@@ -14,11 +14,13 @@ import { CloseSmall } from "@icon-park/react";
 
 export interface CascaderOptionNode {
   value: string;
+  label?: string;
   children: Map<string, CascaderOptionNode>; // Map<label, node>
 }
 
 interface CascaderProps {
   optionList: string[];
+  optionPaths?: ReadonlyMap<string, readonly string[]>;
   optionDescriptions?: ReadonlyMap<string, string>;
   value: string;
   onValueChange: (newValue: string | undefined) => void;
@@ -29,6 +31,7 @@ const CASCADER_TRIGGER_THRESHOLD = 20; // 级联选择器触发阈值
 
 export default function SearchableCascader ({
   optionList,
+  optionPaths,
   optionDescriptions,
   value,
   onValueChange,
@@ -43,10 +46,11 @@ export default function SearchableCascader ({
   const updateIsCascaderDelimitersCustomizable = useEditorStore.use.updateIsCascaderDelimitersCustomizable();
   const cascaderDelimiters = useEditorStore.use.cascaderDelimiters();
   const updateCascaderDelimiters = useEditorStore.use.updateCascaderDelimiters();
-  const displayLabel = useCallback((option: string, label = option) => {
+  const optionName = useCallback((option: string) => optionPaths?.get(option)?.join(' > ') ?? option, [optionPaths]);
+  const displayLabel = useCallback((option: string, label = optionName(option)) => {
     const description = optionDescriptions?.get(option);
     return description ? `${label} ${description}` : label;
-  }, [optionDescriptions]);
+  }, [optionDescriptions, optionName]);
   const renderLabel = useCallback((option: string, label: string) => (
     <span className={styles.optionLabel}>
       <span>{label}</span>
@@ -55,7 +59,7 @@ export default function SearchableCascader ({
   ), [optionDescriptions]);
 
   // 生成级联选项数据
-  const options = useMemo(() => getCascaderOptions(optionList, cascaderDelimiters), [optionList, cascaderDelimiters]);
+  const options = useMemo(() => getCascaderOptions(optionList, cascaderDelimiters, optionPaths), [optionList, cascaderDelimiters, optionPaths]);
 
   // 处理级联选择器节点点击事件
   const handleNodeClick = (
@@ -95,15 +99,15 @@ export default function SearchableCascader ({
               if (aHasChildren !== bHasChildren) {
                 return aHasChildren ? -1 : 1; // 有子元素的优先
               }
-              const textA = a[0].trim().toLowerCase();
-              const textB = b[0].trim().toLowerCase();
+              const textA = (a[1].label ?? a[0]).trim().toLowerCase();
+              const textB = (b[1].label ?? b[0]).trim().toLowerCase();
               return textA.localeCompare(textB);
             })
             .map(([label, node]) => (
               <Option
                 key={label}
                 value={node.value}
-                text={node.children.size === 0 ? displayLabel(node.value, label) : label}
+                text={node.children.size === 0 ? displayLabel(node.value, node.label ?? label) : node.label ?? label}
                 className={
                   styles.cascadeOption +
                   (levelLabels[i] === label ? ' ' + styles.cascadeOptionActive : '')
@@ -111,7 +115,7 @@ export default function SearchableCascader ({
                 onClick={() => handleNodeClick(i, label, node)}
               >
                 <div className={styles.cascadeOptionContent}>
-                  <div className={styles.cascadeOptionText}>{node.children.size === 0 ? renderLabel(node.value, label) : label}</div>
+                  <div className={styles.cascadeOptionText}>{node.children.size === 0 ? renderLabel(node.value, node.label ?? label) : node.label ?? label}</div>
                   {node.children && node.children.size > 0 ? (
                     <div className={styles.arrow}>&gt;</div>
                   ) : null}
@@ -148,7 +152,7 @@ export default function SearchableCascader ({
   const handleSearchOptionClick = (option: string) => {
     onValueChange(option);
     !isPinned && setOpenPopover(false);
-    setLevelLabels(getCascaderLevels(option, cascaderDelimiters));
+    setLevelLabels(getCascaderLevels(option, cascaderDelimiters, optionPaths));
   };
   // 生成搜索过滤后的选项
   const filteredOptions = useMemo(() => {
@@ -173,7 +177,7 @@ export default function SearchableCascader ({
             <div className={styles.cascadeOptionContent}>
               <div className={styles.cascadeOptionText}>
                 <span className={styles.optionLabel}>
-                  <span>{highlightText(option, searchList)}</span>
+                  <span>{highlightText(optionName(option), searchList)}</span>
                   {optionDescriptions?.get(option) && <span className={styles.optionDescription}>{highlightText(optionDescriptions.get(option)!, searchList)}</span>}
                 </span>
               </div>
@@ -188,12 +192,14 @@ export default function SearchableCascader ({
       );
     }
     return result;
-  }, [searchTerm, optionList, value, isPinned, displayLabel]);
+  }, [searchTerm, optionList, value, isPinned, displayLabel, optionName, cascaderDelimiters, optionPaths]);
+
+  const dropdownOptions = useMemo(() => new Map(optionList.map(item => [item, optionName(item)])), [optionList, optionName]);
 
   return (
     <div className={styles.searchableCascader}>
       <WheelDropdown
-        options={new Map(optionList.map(item => [item, item]))}
+        options={dropdownOptions}
         renderOption={optionDescriptions ? renderLabel : undefined}
         value={value}
         onValueChange={(newValue) => onValueChange(newValue)}
@@ -207,14 +213,14 @@ export default function SearchableCascader ({
             setOpenPopover(true);
             setSearchTerm(''); // 重置搜索状态
             // 将显示值设置为当前选中值
-            setLevelLabels(getCascaderLevels(value, cascaderDelimiters));
+            setLevelLabels(getCascaderLevels(value, cascaderDelimiters, optionPaths));
           } else if (!isPinned) { setOpenPopover(false); }
         }}
         positioning="after"
         withArrow
       >
         <PopoverTrigger>
-          {optionList.length > CASCADER_TRIGGER_THRESHOLD ? ( // 仅当选项数量超过阈值时才允许显示级联选择器
+          {(optionPaths || optionList.length > CASCADER_TRIGGER_THRESHOLD) ? (
             <div
               className={styles.popoverTrigger}
             />
@@ -238,7 +244,7 @@ export default function SearchableCascader ({
                   updateIsCascaderDelimitersCustomizable(next);
                   if (!next) {
                     updateCascaderDelimiters(['/']);
-                    setLevelLabels(getCascaderLevels(value, ['/']));
+                    setLevelLabels(getCascaderLevels(value, ['/'], optionPaths));
                   }
                 }}
                 onText={t`启用`}
@@ -261,7 +267,7 @@ export default function SearchableCascader ({
               <TagInputPicker
                 onOptionSelect={(options) => {
                   updateCascaderDelimiters(options);
-                  setLevelLabels(getCascaderLevels(value, options));
+                  setLevelLabels(getCascaderLevels(value, options, optionPaths));
                 }}
                 selectedOptions={cascaderDelimiters}
               />

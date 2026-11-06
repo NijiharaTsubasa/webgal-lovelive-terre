@@ -16,28 +16,43 @@ const bundle=await build({absWorkingDir:root,bundle:true,write:false,format:'iif
     import {FluentProvider,webLightTheme,Button} from '@fluentui/react-components';
     import Picker from './src/components/gltf/GltfFigurePicker';
     import ChooseFile from './src/pages/editor/ChooseFile/ChooseFile';
+    import SearchableCascader from './src/pages/editor/GraphicalEditor/components/SearchableCascader';
     window.selected=[];
-    function App(){const [value,setValue]=useState('选择立绘文件'),[key,setKey]=useState(0);
+    const sharedReference='http://127.0.0.1:3001/webvideo-shared/lib/3d/mtn_exp/anon/angry01.mtn';
+    const namedPaths=new Map([[sharedReference,['共享引擎资源 LoveLive','anon','angry01']]]);
+    function App(){const [value,setValue]=useState('选择立绘文件'),[key,setKey]=useState(0),[named,setNamed]=useState('');
       window.configure=(next)=>{window.selected=[];setValue(next);setKey(k=>k+1)};
       return <FluentProvider theme={webLightTheme}><div style={{padding:40}}>
         <Picker key={key} value={value} enabled placeholder="选择立绘文件" onChange={path=>{window.selected.push(path);setValue(path)}}/>
         <ChooseFile title="普通资源" button={<Button>普通资源</Button>} basePath={['figure']}
           onChange={()=>new Promise(resolve=>window.releaseLegacy=resolve)}/>
+        <div id="named-picker" style={{width:360}}>
+          <SearchableCascader optionList={['anon/angry01',sharedReference]} optionPaths={namedPaths}
+            value={named} onValueChange={next=>{window.namedSelection=next;setNamed(next??'')}}/>
+        </div>
         <div id="outside" style={{marginTop:650}}>outside</div>
       </div></FluentProvider>;
     }
     fetch('/fixtures').then(r=>r.json()).then(data=>{window.fixtures=data;createRoot(document.getElementById('root')).render(<App/>)});
   `},plugins:[{name:'fixture',setup(builder){
+    builder.onResolve({filter:/^@\/pages\/editor\/ChooseFile\/ChooseFile$/},()=>({path:'shared-chooser',namespace:'fixture'}));
     builder.onResolve({filter:/^@\/components\/Assets\/Assets$/},()=>({path:'assets',namespace:'fixture'}));
     builder.onResolve({filter:/^@\/store\/useEditorStore$/},()=>({path:'store',namespace:'fixture'}));
     builder.onResolve({filter:/^@lingui\/macro$/},()=>({path:'lingui',namespace:'fixture'}));
-    builder.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'tsx',resolveDir:root,contents:args.path==='assets'?`
+    builder.onLoad({filter:/.*/,namespace:'fixture'},args=>({loader:'tsx',resolveDir:root,contents:args.path==='shared-chooser'?`
+      import React from 'react';
+      import ChooseFile from './src/pages/editor/ChooseFile/ChooseFile';
+      export default function SharedChooser(props){
+        window.sharedFigure=props.sharedFigure;
+        return <ChooseFile {...props}/>;
+      }
+    `:args.path==='assets'?`
       import React from 'react';
       import FileElement from './src/components/Assets/FileElement';
       import useModelAssets from './src/hooks/gltf/useModelAssets';
       export default function Assets({rootPath,basePath,fileFunction}){
         const {models,loadPreview}=useModelAssets(rootPath,[...rootPath,...basePath]);
-        return <div data-testid="browser" style={{width:'100%',overflow:'auto'}}>{Object.keys(window.fixtures).map(name=>{
+        return <div data-testid="browser" style={{width:'100%',height:'100%',overflow:'auto'}}>{Object.keys(window.fixtures).map(name=>{
           const file={name,path:basePath.join('/')+'/'+name,extName:'',isDir:true};
           return <div key={name} data-testid={'row-'+name} style={{padding:8}}>
             <FileElement rootPath={rootPath} file={file} type="list" model={models.get(file.path)} loadModelPreview={loadPreview}
@@ -46,7 +61,8 @@ const bundle=await build({absWorkingDir:root,bundle:true,write:false,format:'iif
           </div>;
         })}</div>;
       }
-    `:args.path==='store'?`export default {use:new Proxy({}, {get:(_,key)=>()=>key==='subPage'?'demo':()=>{}})};`
+    `:args.path==='store'?`const values={subPage:'demo',cascaderDelimiters:['/'],isCascaderDelimitersCustomizable:false};
+      export default {use:new Proxy({}, {get:(_,key)=>()=>values[key]??(()=>{})})};`
       :`export const t=(strings,...values)=>strings.reduce((text,part,index)=>text+part+(values[index]??''),'');`}));
     builder.onResolve({filter:/^@\//},args=>{const p=resolve(root,'src',args.path.slice(2));return {path:['.ts','.tsx'].map(ext=>p+ext).find(existsSync)??p};});
     builder.onLoad({filter:/\.scss$/},async args=>{
@@ -91,6 +107,7 @@ await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
 try{
   const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];
+  page.setDefaultTimeout(9000);
   page.on('pageerror',e=>errors.push(e.message));
   const images=await page.evaluate(()=>['#0fa3b1','#f7a541','#9055a2','#538d22'].map((color,index)=>{
     const c=document.createElement('canvas');c.width=200;c.height=180;const x=c.getContext('2d');
@@ -156,6 +173,31 @@ try{
   assert.deepEqual(errors,[]);
   assert.ok(requests.some(r=>r.url.endsWith('browseGltfModels')&&r.role==='body'));
   await reset('pairA/config.json+pairB/config.json');await open();await button('确定').waitFor();
+  await page.evaluate(()=>window.sharedFigure.onTabChange(true));
+  await page.getByText('点击「引用共享素材」替换当前头部。').waitFor();
+  const preview=path=>page.evaluate(p=>window.sharedFigure.previewPath(p),path+'/config.json');
+  assert.equal(await preview('headOnly'),'headOnly/config.json+pairB/config.json');
+  await page.evaluate(()=>window.sharedFigure.onStandaloneHighlight(true));
+  await button('确定').waitFor({state:'hidden'});
+  assert.equal(await preview('integrated'),'integrated/config.json');
+  assert.deepEqual(await page.evaluate(()=>window.selected),[]);
+  await page.evaluate(()=>window.sharedFigure.onStandaloneHighlight(false));
+  await button('确定').waitFor();
+  await button('选择身体').click();
+  assert.equal(await preview('bodyOnly'),'pairA/config.json+bodyOnly/config.json');
+  await button('取消').last().click();
+  await open();
+  await page.getByText('点击「引用共享素材」替换当前头部。').waitFor();
+  await button('取消').last().click();
+  await reset('pairA/config.json');await open();await button('确定').waitFor();
+  assert.equal(await preview('pairB'),'pairB/config.json');
+  await assert.rejects(preview('headOnly'),/缺少身体/);
+  await pick('headOnly');
+  await button('选择头部').click();
+  assert.equal(await preview('pairB'),'pairB/config.json');
+  await assert.rejects(preview('headOnly'),/缺少身体/);
+  await button('取消').last().click();
+  await reset('pairA/config.json+pairB/config.json');await open();await button('确定').waitFor();
   await mkdir(resolve(root,'../../.tmp/head-body-picker'),{recursive:true});
   await page.waitForTimeout(350);
   await page.screenshot({path:resolve(root,'../../.tmp/head-body-picker/picker.png')});
@@ -190,5 +232,21 @@ try{
       assert.ok(card.y>=popup.y && card.y+card.height<=confirm.y,`both cards must fit above confirmation: ${label}`);
     }
   }
+  await page.setViewportSize({width:1280,height:900});
+  await button('取消').last().click();
+  const namedTrigger=page.locator('#named-picker [class*="_popoverTrigger"]');
+  await namedTrigger.click();
+  await page.getByText('共享引擎资源 LoveLive',{exact:true}).click();
+  await page.getByText('anon',{exact:true}).click();
+  await page.getByRole('option',{name:'angry01',exact:true}).click();
+  assert.match(await page.evaluate(()=>window.namedSelection),/\/webvideo-shared\/lib\/3d\/mtn_exp\/anon\/angry01\.mtn$/);
+  await page.getByRole('option',{name:'angry01',exact:true}).waitFor({state:'hidden'});
+  await namedTrigger.click();
+  await page.getByPlaceholder('请输入搜索提示词...').waitFor();
+  await page.getByRole('option').filter({hasText:/^angry01$/}).waitFor();
+  await page.getByPlaceholder('请输入搜索提示词...').fill('angry01');
+  await page.getByRole('option').filter({hasText:/^共享引擎资源 LoveLive > anon > angry01$/}).waitFor();
+  await page.getByRole('option').filter({hasText:/^anon\/angry01$/}).click();
+  assert.equal(await page.evaluate(()=>window.namedSelection),'anon/angry01');
   console.log('Figure composition: draft defaults, independent previews/hover, wrong role, confirmation, reopen, cancel, integrated, duplicates and legacy close passed.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}
