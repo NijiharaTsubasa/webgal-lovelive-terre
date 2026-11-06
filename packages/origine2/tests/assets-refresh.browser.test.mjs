@@ -49,7 +49,8 @@ test('figure browser keeps mounted rows, thumbnails and scroll during catalog up
       });
     } }] });
   let revision = 0, directoryReads = 0, modelReads = 0;
-  const names = Array.from({ length: 60 }, (_, i) => `pair${String(i).padStart(2, '0')}`);
+  const names = ['pair02BodyOnly', 'pair02HeadOnly', 'pair02Integrated', 'pair02OrdinaryFolder',
+    ...Array.from({ length: 60 }, (_, i) => `pair${String(i).padStart(2, '0')}`)];
   const image = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=';
   const component = (role, name) => ({ type: 'model', role, name, model: role + '.glb', group: 'garupa', preview: image });
   const parts = name => [component('head', name), component('body', name)];
@@ -62,7 +63,12 @@ test('figure browser keeps mounted rows, thumbnails and scroll during catalog up
       let body = ''; for await (const chunk of req) body += chunk;
       const data = JSON.parse(body);
       if (req.url.endsWith('updateGltfResourceCatalog')) return json({ enabled: true, indexing: true, revision: ++revision, resources: [] });
-      if (req.url.endsWith('browseGltfModels')) { modelReads++; return json({ models: names.map(path => ({ path, name: path, preview: image })) }); }
+      if (req.url.endsWith('browseGltfModels')) {
+        modelReads++;
+        const roles = { pair02BodyOnly: 'body', pair02HeadOnly: 'head', pair02Integrated: 'integrated' };
+        return json({ models: names.filter(path => path !== 'pair02OrdinaryFolder').map(path =>
+          ({ path, name: path, preview: image, role: roles[path] ?? data.role ?? 'composed' })) });
+      }
       if (req.url.endsWith('selectGltfModel')) {
         const name = data.path.split('/')[0];
         return json({ role: 'composed', group: 'garupa', selectionParts: parts(name).filter(p => !data.role || p.role === data.role) });
@@ -82,7 +88,12 @@ test('figure browser keeps mounted rows, thumbnails and scroll during catalog up
   await page.getByRole('button', { name: '确定', exact: true }).waitFor();
   await page.getByRole('status').waitFor({ state: 'hidden' });
   const row = page.locator('[draggable="true"]').filter({ hasText: 'pair01' });
+  const fileRow = name => page.locator('[draggable="true"]').filter({ hasText: name });
   await row.locator('img[src^="data:image/webp"]').waitFor();
+  await fileRow('pair02BodyOnly').waitFor({ state: 'hidden' });
+  await fileRow('pair02HeadOnly').waitFor();
+  await fileRow('pair02Integrated').waitFor();
+  await fileRow('pair02OrdinaryFolder').waitFor();
   await page.evaluate(() => {
     window.savedRow = [...document.querySelectorAll('[draggable="true"]')].find(e => e.textContent === 'pair01');
     window.savedImage = window.savedRow.querySelector('img');
@@ -97,6 +108,10 @@ test('figure browser keeps mounted rows, thumbnails and scroll during catalog up
   await page.getByRole('status').waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.savedRow.isConnected), true, 'selecting a head must not recreate the browser rows');
   await page.getByRole('button', { name: '选择身体', exact: true }).click();
+  await fileRow('pair02HeadOnly').waitFor({ state: 'hidden' });
+  await fileRow('pair02BodyOnly').waitFor();
+  await fileRow('pair02Integrated').waitFor();
+  await fileRow('pair02OrdinaryFolder').waitFor();
   await row.click();
   await page.getByRole('status').waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.savedRow.isConnected), true, 'selecting a body must not recreate the browser rows');

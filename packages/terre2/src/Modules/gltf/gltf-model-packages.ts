@@ -132,7 +132,7 @@ export async function browseGltfModels(gameRoot: string, directory: string, role
           const complete = await readGltfModel(gameRoot, candidate);
           const selected = role ? complete.selectionParts.find(part => part.role === role) : undefined;
           const { parts, selectionParts, ...model } = selected ?? complete;
-          // Keep model folders selectable so a missing part is reported before entering them.
+          // Return incompatible packages too so the picker can distinguish them from ordinary folders.
           if (role && !selected && model.role !== 'integrated') model.preview = undefined;
           models.push(model);
         } catch (error) {

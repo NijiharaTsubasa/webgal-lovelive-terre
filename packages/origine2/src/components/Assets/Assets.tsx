@@ -161,7 +161,7 @@ export default function Assets({
 
   const currentPath = useValue([...basePath, ...selectedFilePath.slice(0, -1)]);
   const currentFullPath = useMemo(() => [...rootPath, ...currentPath.value], [rootPath.join('/'), currentPath.value]);
-  const { models, loadPreview, refreshModels, indexError } = useModelAssets(rootPath, currentFullPath);
+  const { models, incompatibleModelPaths, loadPreview, refreshModels, indexError } = useModelAssets(rootPath, currentFullPath);
   const lastPath = useValue<string[]>([...basePath, ...selectedFilePath]);
   const isBasePath = currentPath.value.join('/') === basePath.join('/');
   const extNameTypes = fileConfig
@@ -223,13 +223,14 @@ export default function Assets({
         (file) =>
           file.name.toLocaleLowerCase().includes(filterText.value.toLocaleLowerCase()) &&
           !fileConfig?.get(file.path)?.isHidden &&
+          (!chooseModelDirectory || !incompatibleModelPaths.has(file.path)) &&
           (file.isDir || !fileFilter || fileFilter(file)) &&
           (!allowedExtNames ||
             allowedExtNames.length === 0 ||
             allowedExtNames.includes(file.extName.toLocaleLowerCase()) ||
             file.isDir),
       ) ?? [],
-    [files, filterText, fileConfig, allowedExtNames, fileFilter],
+    [files, filterText, fileConfig, allowedExtNames, fileFilter, chooseModelDirectory, incompatibleModelPaths],
   );
 
   const sortedFiles = useMemo(() => {
